@@ -80,3 +80,19 @@ Then, follow the on-screen instructions to interact with MEDA.
 
 ## Paper
 Our paper is accepted to IDETC 2025. More details to follow.
+
+## Citation
+If you use this dataset in your work, please consider citing the following publications.
+```
+@inproceedings{panta2025meda,
+  author    = {Nirmal Prasad Panta and Saugat Kafley and Rujal Acharya and Sashank Parajuli and Dikshya Parajuli and Prince Panta and Saroj Belbase and Sudikshya Pant and Amit Regmi and Akio Tanaka and Christopher McComb},
+  title     = {{MEDA: A Multi-Agent System for Parametric CAD Model Creation}},
+  booktitle = {Proceedings of the ASME 2025 International Design Engineering Technical Conferences
+               and Computers and Information in Engineering Conference (IDETC/CIE 2025)},
+  year      = {2025},
+  address   = {Anaheim, CA, USA},
+  paperid   = {IDETC2025-163946},
+  publisher = {American Society of Mechanical Engineers (ASME)},
+  note      = {DOI to be assigned}
+}
+```
