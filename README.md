@@ -82,7 +82,7 @@ Then, follow the on-screen instructions to interact with MEDA.
 Our paper is accepted to IDETC 2025. More details to follow.
 
 ## Citation
-If you use this dataset in your work, please consider citing the following publications.
+If you use this in your work, please consider citing the following publications.
 ```
 @inproceedings{MEDA2025,
   author    = {Nirmal Prasad Panta and Saugat Kafley and Rujal Acharya and Sashank Parajuli and Dikshya Parajuli and Prince Panta and Saroj Belbase and Sudikshya Pant and Amit Regmi and Akio Tanaka and Christopher McComb},
