@@ -93,6 +93,7 @@ If you use this in your work, please consider citing the following publications.
   address   = {Anaheim, CA, USA},
   paperid   = {IDETC2025-163946},
   publisher = {American Society of Mechanical Engineers (ASME)},
-  note      = {DOI to be assigned}
+  doi       = {10.1115/DETC2025-163946}
+  url       = {https://doi.org/10.1115/DETC2025-163946}
 }
 ```
