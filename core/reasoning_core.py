@@ -99,8 +99,12 @@ def run_cad_execution() -> str:
             except Exception as e:
                 active.log(f"[WARNING] Failed to save intermediate iteration files: {e}")
         
-        # Calculate reward internally to provide quick feedback
-        reward, breakdown = RewardEngine.calculate_reward(res.success, res.metrics, active.constraints)
+        # Calculate reward internally to provide quick feedback. The generated
+        # STL path enables distance-based scoring when a reference shape is set.
+        generated_stl = str(active.sandbox.working_dir / "001.stl")
+        reward, breakdown = RewardEngine.calculate_reward(
+            res.success, res.metrics, active.constraints, generated_stl=generated_stl
+        )
         
         if not res.success:
             err_msg = "Compilation failure"
@@ -163,6 +167,8 @@ def run_cad_execution() -> str:
             "success": res.success,
             "metrics": res.metrics,
             "reward": reward,
+            "geom_score": breakdown.get("geom_score"),
+            "distances": breakdown.get("distances"),
             "failed_constraints": breakdown["failed_constraints"]
         }
         return json.dumps(output)
