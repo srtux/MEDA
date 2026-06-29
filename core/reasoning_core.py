@@ -22,6 +22,10 @@ from core.sandbox import Sandbox
 from core.reward_engine import RewardEngine
 from core.learning_store import LearningStore
 from core.lesson_signature import to_signature
+from core.memory import CADMemoryStore
+from core.cad_knowledge import KNOWLEDGE_BASE
+from core.geometry_introspection import INTROSPECTION_SNIPPET, parse_report, format_report
+from core import candidate_search
 
 load_dotenv()
 
@@ -85,6 +89,49 @@ def remove_feature(index: int) -> str:
             return f"Feature step {index} removed from timeline."
         return f"Error: Feature step index {index} out of range."
     return "Error: No active CAD session."
+
+def lookup_cadquery_api(query: str) -> str:
+    """Look up the correct CadQuery API for an operation before writing code.
+
+    Returns signatures, gotchas and worked examples for the methods most
+    relevant to ``query`` (e.g. "drill a counterbored hole", "fillet vertical
+    edges", "hollow shell"). Use this whenever unsure which method/selector to
+    call, instead of guessing a method name.
+    """
+    global _active_core
+    embed_fn = None
+    if _active_core is not None and getattr(_active_core, "store", None) is not None:
+        embed_fn = _active_core.store._embed
+    try:
+        return KNOWLEDGE_BASE.lookup(query, k=4) if embed_fn is None else \
+            (KNOWLEDGE_BASE.retrieve_block(query, k=4, embed_fn=embed_fn) or
+             KNOWLEDGE_BASE.lookup(query, k=4))
+    except Exception:
+        return KNOWLEDGE_BASE.lookup(query, k=4)
+
+
+def inspect_current_model() -> str:
+    """Measure the current solid's real faces and edges to ground selectors.
+
+    Compiles the current timeline and reports each face's orientation/center and
+    each edge's orientation/length, plus ready-to-use selector hints (e.g.
+    "4x vertical (|Z)"). Call this BEFORE applying a fillet, chamfer, shell or
+    face-targeted hole so the selector matches geometry that actually exists.
+    """
+    global _active_core
+    if not _active_core:
+        return "Error: No active CAD session."
+    core = _active_core
+    if not core.canvas.features:
+        return "No features on the timeline yet; add a base solid before inspecting geometry."
+    code = core.canvas.to_python_code() + "\n" + INTROSPECTION_SNIPPET
+    res = core.sandbox.execute(code)
+    report = parse_report(res.stdout)
+    if report is None:
+        err = (res.stderr or "").strip()[:200]
+        return f"Could not inspect geometry: the model did not build. {err}"
+    return format_report(report)
+
 
 def run_cad_execution() -> str:
     """Compile and execute the current CAD script in the sandbox.
@@ -256,10 +303,13 @@ You have access to the following tools:
 - `add_feature`: Append a new CadQuery CAD code block to the timeline (always modifying the 'model' solid variable).
 - `modify_feature`: Surgically update or replace the code of an existing feature step.
 - `remove_feature`: Surgically remove an unwanted feature step from the timeline.
+- `lookup_cadquery_api`: Look up the correct CadQuery method signature, gotchas and an example for an operation (e.g. "counterbored hole", "fillet vertical edges", "hollow shell"). Call this BEFORE writing an operation you are unsure about — never guess a method name.
+- `inspect_current_model`: Measure the real faces and edges of the current solid (orientations, lengths, selector hints). Call this BEFORE a fillet, chamfer, shell, or face-targeted hole so your selector (e.g. `'|Z'`, `'>Z'`) matches edges/faces that actually exist and your fillet/chamfer radius stays under the safe ceiling it reports.
 
 **Your Workflow**:
 - Define all necessary parameters first.
-- Construct the solid features step-by-step.
+- Construct the solid features step-by-step. Prefer the exact methods/selectors returned by `lookup_cadquery_api`.
+- Before any advanced feature (fillet/chamfer/shell/face hole), call `inspect_current_model` and choose selectors grounded in the measured geometry.
 - After making modification changes, return control to your coordinator so the visual critic can compile and verify them. Do not attempt to run verification yourself; you do not have sandbox execution tools.
 """
 
@@ -274,6 +324,24 @@ You have access to the following tool:
 - Read the output JSON containing the success status, failed constraints, visual critiques, and reward value.
 - Report these findings back to your coordinator. If there are failures, describe them clearly so the modeler can correct them.
 """
+
+    SINGLE_SHOT_SYSTEM = """
+            You are an expert parametric CAD script writer. Your task is to write a complete, self-contained Python script using the CadQuery library to design the requested CAD model.
+
+            Follow these rules:
+            1. Always import cadquery as cq: `import cadquery as cq`
+            2. Declare all parametric variables (dimensions, offsets, radii, heights) clearly at the top of the script.
+            3. Build the CAD geometry step-by-step.
+            4. Assign the final solid shape or cq.Assembly object to the variable named `model`.
+            5. Export the model at the end:
+               try:
+                   cq.exporters.export(model, '001.stl')
+                   cq.exporters.export(model, '001.step')
+                   print('[COMPILE_SUCCESS]')
+               except Exception as e:
+                   print(f'[EXPORT_ERROR] {e}')
+            6. Return ONLY the raw Python code. Do not wrap it in markdown code blocks or triple backticks.
+            """
 
     def __init__(self, working_dir: str = "NewCADs", model_name: str = "gemini-3.5-flash", api_key: Optional[str] = None):
         self.canvas = Canvas()
@@ -299,6 +367,15 @@ You have access to the following tool:
         except Exception as e:
             self.store = None
             print(f"[WARNING] Learning store unavailable: {e}", flush=True)
+
+        # Lightweight cross-run trajectory memory (compact per-run lessons).
+        # Previously referenced as ``self.memory_store`` but never instantiated,
+        # so every record_run() call silently failed — now wired up.
+        try:
+            self.trajectory_memory: Optional[CADMemoryStore] = CADMemoryStore()
+        except Exception as e:
+            self.trajectory_memory = None
+            print(f"[WARNING] Trajectory memory unavailable: {e}", flush=True)
 
         # Per-run render bookkeeping.
         self.render_iter = 0
@@ -376,28 +453,54 @@ You have access to the following tool:
 
     # ---------------------------------------------------------- learning
     def build_memory_preamble(self, prompt: str) -> str:
-        """Retrieve relevant skills + lessons for a prompt as an instruction preamble."""
-        if not self.store:
-            return ""
+        """Build the modeler preamble: retrieved CadQuery API docs + skills + lessons.
+
+        The API reference block (RAG grounding, roadmap §8.1) is always included
+        because it is always relevant to CadQuery codegen and is the cheapest
+        defense against hallucinated methods. Skills/lessons/trajectory tips are
+        added when the learning store has relevant entries.
+        """
+        lines: List[str] = []
+
+        # 1. CadQuery API RAG grounding (always-on; works offline via keywords).
         try:
-            skills = self.store.retrieve_skills(prompt, k=4)
-            lessons = self.store.retrieve_lessons(prompt, k=3)
+            embed_fn = self.store._embed if self.store else None
+            api_block = KNOWLEDGE_BASE.retrieve_block(prompt, k=6, embed_fn=embed_fn)
+            if api_block:
+                lines.append(api_block)
         except Exception as e:
-            self.log(f"[WARNING] Memory retrieval failed: {e}")
-            return ""
-        if not skills and not lessons:
-            return ""
-        lines = []
-        if skills:
-            lines.append("## Reusable CadQuery skills (parameterized snippets that worked before):")
-            for s in skills:
-                lines.append(f"- {s['name']} {s['signature']}: {s['goal_description']}")
-                lines.append(f"    {s['code_template']}")
-        if lessons:
-            lines.append("\n## Lessons from past failures (do NOT repeat these mistakes):")
-            for l in lessons:
-                lines.append(f"- [{l['error_signature']}] {l['root_cause']} FIX: {l['corrective_fix']}")
-        return "\n".join(lines)
+            self.log(f"[WARNING] API doc retrieval failed: {e}")
+
+        # 2. Reusable skills + lessons from the durable learning store.
+        if self.store:
+            try:
+                skills = self.store.retrieve_skills(prompt, k=4)
+                lessons = self.store.retrieve_lessons(prompt, k=3)
+            except Exception as e:
+                self.log(f"[WARNING] Memory retrieval failed: {e}")
+                skills, lessons = [], []
+            if skills:
+                lines.append("\n## Reusable CadQuery skills (parameterized snippets that worked before):")
+                for s in skills:
+                    lines.append(f"- {s['name']} {s['signature']}: {s['goal_description']}")
+                    lines.append(f"    {s['code_template']}")
+            if lessons:
+                lines.append("\n## Lessons from past failures (do NOT repeat these mistakes):")
+                for l in lessons:
+                    lines.append(f"- [{l['error_signature']}] {l['root_cause']} FIX: {l['corrective_fix']}")
+
+        # 3. Compact trajectory tips from prior similar runs.
+        if self.trajectory_memory:
+            try:
+                mems = self.trajectory_memory.retrieve(prompt, limit=2)
+            except Exception:
+                mems = []
+            if mems:
+                lines.append("\n## Tips from prior similar design runs:")
+                for m in mems:
+                    lines.append(f"- ({m.outcome}) {m.tip}")
+
+        return "\n".join(lines).strip()
 
     def recall_lessons(self, failed_constraints):
         """For each current failure, recall the most similar past lessons."""
@@ -427,25 +530,32 @@ You have access to the following tool:
             return
         curr_sigs = {to_signature(fc) for fc in current_failed}
         resolved = self._prev_failed_sigs - curr_sigs
-        persisted = self._prev_failed_sigs & curr_sigs
 
-        # Positive feedback + new lesson when a prior failure is resolved.
+        # A prior failure is now resolved: reward the surfaced lesson that helped
+        # and persist the working fix as the lesson's corrective_fix. (The store
+        # exposes record_lesson + feedback; the previously-called
+        # record_lesson_resolution/record_failure methods never existed, so this
+        # whole loop silently no-op'd behind the try/except.)
         for sig in resolved:
             self.log(f"[LOG] Lesson learned! Prior failure [{sig}] was successfully resolved.")
             lesson_id = self._surfaced_lessons.get(sig)
             try:
-                self.store.record_lesson_resolution(
-                    lesson_id=lesson_id,
+                if lesson_id:
+                    self.store.feedback(lesson_id, helped=True)
+                detail = self._prev_detail.get(sig, "")
+                self.store.record_lesson(
                     error_signature=sig,
-                    prompt=self.prompt,
-                    failing_context=self._prev_detail.get(sig, ""),
-                    correct_code=code
+                    error_detail=detail,
+                    root_cause=detail,
+                    corrective_fix=code,
+                    prompt_context=self.prompt,
                 )
             except Exception as e:
                 self.log(f"[WARNING] Failed to record lesson resolution: {e}")
 
-        # Negative feedback: record fresh lessons for any persistent or new failures
-        # if the reward failed to improve.
+        # Negative feedback: record a failure-context lesson (no fix yet) for any
+        # persistent/new failure when the reward did not improve. A later
+        # resolution merges into the same signature and fills in corrective_fix.
         if reward <= self._prev_reward and curr_sigs:
             for sig in curr_sigs:
                 desc = self._prev_detail.get(sig, "")
@@ -456,11 +566,12 @@ You have access to the following tool:
                             desc = fc
                             break
                 try:
-                    self.store.record_failure(
+                    self.store.record_lesson(
                         error_signature=sig,
-                        prompt=self.prompt,
-                        failing_context=desc,
-                        failing_code=code
+                        error_detail=desc,
+                        root_cause=desc,
+                        corrective_fix="",
+                        prompt_context=self.prompt,
                     )
                 except Exception as e:
                     self.log(f"[WARNING] Failed to record failure lesson: {e}")
@@ -534,6 +645,167 @@ You have access to the following tool:
             except Exception as e:
                 raise e
 
+    # ---------------------------------------------------- generation helpers
+    @staticmethod
+    def _strip_code_fence(text: str) -> str:
+        """Strip a leading/trailing markdown code fence from model output."""
+        text = (text or "").strip()
+        if text.startswith("```"):
+            lines = text.splitlines()
+            if lines and lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines and lines[-1].startswith("```"):
+                lines = lines[:-1]
+            text = "\n".join(lines).strip()
+        return text
+
+    def _select_color(self, prompt: str, default: str = "#FF9900") -> str:
+        """Ask the model for a representative hex color for the design."""
+        try:
+            color_system = """
+            You are a design color coordinator. Given a CAD model description prompt, return a suitable single hex color code (e.g. "#FF0800" for apple, "#8B5A2B" for wood box, "#708090" for steel tube) that represents the typical visual appearance of the object.
+            Return the result as a raw JSON object containing only a "color" key. Do not include markdown formatting or extra text.
+            """
+            resp = self._safe_call(
+                self.client.models.generate_content,
+                model=self.model_name,
+                contents=prompt,
+                config=types.GenerateContentConfig(
+                    system_instruction=color_system,
+                    temperature=0.0,
+                    response_mime_type="application/json",
+                ),
+            )
+            return json.loads(resp.text.strip()).get("color", default)
+        except Exception as e:
+            self.log(f"[WARNING] Failed to auto-select color: {e}")
+            return default
+
+    def _candidate_generation_contents(self, prompt, constraints, image_path, strategy_hint, memory_preamble):
+        """Build the content parts for one single-shot candidate generation."""
+        text = f"Design Goal: {prompt}\nTarget constraints: {json.dumps(constraints)}"
+        if strategy_hint:
+            text += f"\n\n{strategy_hint}"
+        if memory_preamble:
+            text += f"\n\n# Reference (retrieved CadQuery API + prior lessons)\n{memory_preamble}"
+        parts = [types.Part.from_text(text=text)]
+        if image_path:
+            img_path = Path(image_path)
+            if img_path.exists():
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(img_path)
+                with open(img_path, "rb") as f:
+                    img_bytes = f.read()
+                parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime_type or "image/png"))
+        return parts
+
+    def _generate_candidate_script(self, prompt, constraints, image_path, strategy_hint, temperature, memory_preamble):
+        contents = self._candidate_generation_contents(
+            prompt, constraints, image_path, strategy_hint, memory_preamble
+        )
+        resp = self._safe_call(
+            self.client.models.generate_content,
+            model=self.model_name,
+            contents=contents,
+            config=types.GenerateContentConfig(
+                system_instruction=self.SINGLE_SHOT_SYSTEM,
+                temperature=temperature,
+            ),
+        )
+        return self._strip_code_fence(resp.text)
+
+    def _execute_and_score_candidate(self, code: str, constraints: Dict[str, Any]) -> "candidate_search.Candidate":
+        """Compile one candidate and wrap its result + graded score."""
+        res = self.sandbox.execute(code)
+        stl_file = self.sandbox.working_dir / "001.stl"
+        generated_stl = str(stl_file) if (res.success and stl_file.exists()) else None
+        reward, breakdown = RewardEngine.calculate_reward(
+            res.success, res.metrics, constraints, generated_stl=generated_stl
+        )
+        err = ""
+        if not res.success:
+            err = (res.stderr or res.stdout or "compile failure").strip()[:200]
+        return candidate_search.Candidate(
+            strategy="",
+            code=code,
+            success=res.success,
+            metrics=res.metrics,
+            geom_score=breakdown.get("geom_score", 0.0),
+            reward=reward,
+            error=err,
+        )
+
+    def _run_candidate_search_impl(
+        self, prompt, constraints, image_path, num_candidates, session_id
+    ) -> Dict[str, Any]:
+        """Generate N diverse candidates, rank them, and keep the best (EvoCAD-style)."""
+        self.log(f"\n[LOG] Parallel candidate search: generating {num_candidates} diverse candidates...")
+        if self.event_callback:
+            self.event_callback({
+                "type": "thought",
+                "author": "MEDAOrchestrator",
+                "content": f"Generating {num_candidates} candidate designs with different strategies and keeping the best.",
+            })
+        memory_preamble = self.build_memory_preamble(prompt)
+
+        def generate_fn(name, hint, temp):
+            if self.event_callback:
+                self.event_callback({
+                    "type": "thought",
+                    "author": "CADModelerAgent",
+                    "content": f"Candidate '{name}' (temp={temp}): {hint.split(':', 1)[-1].strip()[:80]}",
+                })
+            return self._generate_candidate_script(prompt, constraints, image_path, hint, temp, memory_preamble)
+
+        def execute_fn(code):
+            return self._execute_and_score_candidate(code, constraints)
+
+        best, cands = candidate_search.run_candidate_search(
+            num_candidates, generate_fn, execute_fn, self.log
+        )
+
+        success = bool(best and best.success)
+        final_code = best.code if best else ""
+
+        # Re-execute the winner so the on-disk artifacts (001.stl/step) and any
+        # render reflect the selected candidate, not the last one generated.
+        if best and best.code:
+            self._execute_and_score_candidate(best.code, constraints)
+            self.successful_compiles_count += 1 if success else 0
+
+        final_py_path = self.sandbox.working_dir / "001.py"
+        with open(final_py_path, "w", encoding="utf-8") as f:
+            f.write(final_code)
+
+        color = self._select_color(prompt) if success else "#FF9900"
+
+        if self.trajectory_memory:
+            try:
+                self.trajectory_memory.record_run(
+                    prompt=prompt,
+                    success=success,
+                    metrics=best.metrics if best else None,
+                    failed_constraints=[best.error] if (best and not success and best.error) else [],
+                )
+            except Exception as e:
+                self.log(f"[WARNING] Failed to store trajectory memory: {e}")
+
+        return {
+            "success": success,
+            "iterations": num_candidates,
+            "final_reward": best.reward if best else 0.0,
+            "final_code": final_code,
+            "metrics": best.metrics if best else None,
+            "failed_constraints": ([best.error] if (best and not success and best.error) else []),
+            "color": color,
+            "session_id": session_id,
+            "candidates": [
+                {"strategy": c.strategy, "success": c.success, "score": c.score,
+                 "geom_score": c.geom_score, "error": c.error[:120]}
+                for c in cands
+            ],
+        }
+
     def run_design_loop(
         self,
         prompt: str,
@@ -542,11 +814,12 @@ You have access to the following tool:
         max_iterations: int = 100,
         session_id: Optional[str] = None,
         keep_canvas: bool = False,
-        fast_mode: bool = False
+        fast_mode: bool = False,
+        num_candidates: int = 1
     ) -> Dict[str, Any]:
         """Serialized public entry point (bug H4) that delegates to the impl."""
         with _run_lock:
-            return self._run_design_loop_impl(prompt, constraints, image_path, max_iterations, session_id, keep_canvas, fast_mode)
+            return self._run_design_loop_impl(prompt, constraints, image_path, max_iterations, session_id, keep_canvas, fast_mode, num_candidates)
 
     def _run_design_loop_impl(
         self,
@@ -556,7 +829,8 @@ You have access to the following tool:
         max_iterations: int = 100,
         session_id: Optional[str] = None,
         keep_canvas: bool = False,
-        fast_mode: bool = False
+        fast_mode: bool = False,
+        num_candidates: int = 1
     ) -> Dict[str, Any]:
         """Runs the autonomous Chain-of-Thought tool execution loop until the design goal is achieved."""
         global _active_core
@@ -659,6 +933,17 @@ You have access to the following tool:
         # Merge constraints
         self.constraints = {**inferred_constraints, **constraints}
 
+        # Parallel candidate search (EvoCAD-style): generate N diverse single-shot
+        # candidates and keep the best by compile + geometry + simplicity score.
+        if num_candidates and num_candidates > 1:
+            try:
+                result = self._run_candidate_search_impl(
+                    prompt, self.constraints, image_path, int(num_candidates), session_id
+                )
+            finally:
+                _active_core = None
+            return result
+
         if fast_mode:
             self.log("\n[LOG] Fast Mode: Generating CAD model in a single-shot execution...")
             if self.event_callback:
@@ -678,24 +963,8 @@ You have access to the following tool:
                         img_bytes = f.read()
                     parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime_type or "image/png"))
             
-            system_instruction = """
-            You are an expert parametric CAD script writer. Your task is to write a complete, self-contained Python script using the CadQuery library to design the requested CAD model.
-            
-            Follow these rules:
-            1. Always import cadquery as cq: `import cadquery as cq`
-            2. Declare all parametric variables (dimensions, offsets, radii, heights) clearly at the top of the script.
-            3. Build the CAD geometry step-by-step.
-            4. Assign the final solid shape or cq.Assembly object to the variable named `model`.
-            5. Export the model at the end:
-               try:
-                   cq.exporters.export(model, '001.stl')
-                   cq.exporters.export(model, '001.step')
-                   print('[COMPILE_SUCCESS]')
-               except Exception as e:
-                   print(f'[EXPORT_ERROR] {e}')
-            6. Return ONLY the raw Python code. Do not wrap it in markdown code blocks or triple backticks.
-            """
-            
+            system_instruction = self.SINGLE_SHOT_SYSTEM
+
             attempts = 3
             current_code = ""
             error_log = ""
@@ -764,28 +1033,8 @@ You have access to the following tool:
                     self.log(f"[WARNING] Compilation failed: {error_log.strip()}")
             
             # Select color
-            suggested_color = "#FF9900"
-            if success:
-                try:
-                    color_system = """
-                    You are a design color coordinator. Given a CAD model description prompt, return a suitable single hex color code (e.g. "#FF0800" for apple, "#8B5A2B" for wood box, "#708090" for steel tube) that represents the typical visual appearance of the object.
-                    Return the result as a raw JSON object containing only a "color" key. Do not include markdown formatting or extra text.
-                    """
-                    resp = self._safe_call(
-                        self.client.models.generate_content,
-                        model=self.model_name,
-                        contents=prompt,
-                        config=types.GenerateContentConfig(
-                            system_instruction=color_system,
-                            temperature=0.0,
-                            response_mime_type="application/json"
-                        )
-                    )
-                    color_data = json.loads(resp.text.strip())
-                    suggested_color = color_data.get("color", "#FF9900")
-                except Exception as e:
-                    self.log(f"[WARNING] Failed to auto-select color: {e}")
-            
+            suggested_color = self._select_color(prompt) if success else "#FF9900"
+
             # Save files
             final_py_path = self.sandbox.working_dir / "001.py"
             with open(final_py_path, "w", encoding="utf-8") as f:
@@ -847,7 +1096,8 @@ You have access to the following tool:
             model=model_wrapper,
             description="CAD modeler specialist that defines parameters and updates timeline features",
             instruction=modeler_instruction,
-            tools=[add_parameter, set_parameter, add_feature, modify_feature, remove_feature],
+            tools=[add_parameter, set_parameter, add_feature, modify_feature,
+                   remove_feature, lookup_cadquery_api, inspect_current_model],
             before_model_callback=_attach_render,
         )
 
@@ -879,8 +1129,11 @@ You have access to the following tool:
             auto_create_session=True
         )
 
-        # Build parts for initial message
-        parts = [types.Part.from_text(text=f"Design Goal: {prompt}\nTarget constraints: {json.dumps(self.constraints)}{memory_guidance}")]
+        # Build parts for initial message. (The retrieved memory/skills/API docs
+        # are already injected into the modeler/critic instructions above, so the
+        # opening user message stays concise — the previously-referenced
+        # `memory_guidance` variable never existed and crashed this path.)
+        parts = [types.Part.from_text(text=f"Design Goal: {prompt}\nTarget constraints: {json.dumps(self.constraints)}")]
         if image_path:
             img_path = Path(image_path)
             if img_path.exists():
@@ -1008,26 +1261,8 @@ You have access to the following tool:
         suggested_color = "#FF9900"
         if current_reward == 1.0:
             self.harvest_skill()
-            try:
-                color_system = """
-                You are a design color coordinator. Given a CAD model description prompt, return a suitable single hex color code (e.g. "#FF0800" for apple, "#8B5A2B" for wood box, "#708090" for steel tube) that represents the typical visual appearance of the object.
-                Return the result as a raw JSON object containing only a "color" key. Do not include markdown formatting or extra text.
-                """
-                resp = self._safe_call(
-                    self.client.models.generate_content,
-                    model=self.model_name,
-                    contents=prompt,
-                    config=types.GenerateContentConfig(
-                        system_instruction=color_system,
-                        temperature=0.0,
-                        response_mime_type="application/json"
-                    )
-                )
-                color_data = json.loads(resp.text.strip())
-                suggested_color = color_data.get("color", "#FF9900")
-                self.log(f"[LOG] Auto-selected color {suggested_color} for prompt '{prompt}'")
-            except Exception as e:
-                self.log(f"[WARNING] Failed to auto-select color: {e}")
+            suggested_color = self._select_color(prompt)
+            self.log(f"[LOG] Auto-selected color {suggested_color} for prompt '{prompt}'")
 
         final_code = self.canvas.to_python_code()
         
@@ -1055,16 +1290,17 @@ You have access to the following tool:
         with open(diagnostic_path, "w", encoding="utf-8") as f:
             json.dump(diagnostic, f, indent=2)
 
-        try:
-            self.memory_store.record_run(
-                prompt=prompt,
-                success=current_reward == 1.0,
-                metrics=last_execution_result.get("metrics"),
-                failed_constraints=last_execution_result.get("failed_constraints", []),
-            )
-            self.log("[LOG] Stored trajectory memory for future self-improvement.")
-        except Exception as e:
-            self.log(f"[WARNING] Failed to store trajectory memory: {e}")
+        if self.trajectory_memory:
+            try:
+                self.trajectory_memory.record_run(
+                    prompt=prompt,
+                    success=current_reward == 1.0,
+                    metrics=last_execution_result.get("metrics"),
+                    failed_constraints=last_execution_result.get("failed_constraints", []),
+                )
+                self.log("[LOG] Stored trajectory memory for future self-improvement.")
+            except Exception as e:
+                self.log(f"[WARNING] Failed to store trajectory memory: {e}")
 
         # Clean global pointer
         _active_core = None
