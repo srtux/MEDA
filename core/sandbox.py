@@ -79,6 +79,17 @@ _BANNED_ATTRS = frozenset({
     "__class_getitem__", "__init_subclass__", "__subclasshook__", "__set_name__",
 })
 
+
+# Module-level file/network/process APIs exposed by otherwise useful numeric or
+# geometry packages. These are blocked as attributes/calls because a generated
+# CadQuery script does not need to read arbitrary local files or spawn helpers.
+_BANNED_IO_ATTRS = frozenset({
+    "load", "save", "savez", "savez_compressed", "fromfile", "tofile",
+    "genfromtxt", "loadtxt", "savetxt", "memmap", "DataSource",
+    "read_text", "read_bytes", "write_text", "write_bytes",
+    "read", "write", "readline", "readlines", "writelines",
+})
+
 # str.format/format_map perform getattr/getitem on field specs whose dunder
 # names live inside the literal, invisible to the Attribute/Name checks — e.g.
 # ``"{0.__globals__[__builtins__]}".format(func)``. Heuristically flag literals
@@ -126,6 +137,8 @@ def validate_code(code: str) -> Optional[str]:
         elif isinstance(node, ast.Attribute):
             if node.attr in _BANNED_ATTRS:
                 return f"disallowed attribute access '{node.attr}'."
+            if node.attr in _BANNED_IO_ATTRS:
+                return f"disallowed file/process I/O attribute '{node.attr}'."
         # Block name references to banned dunders OR to dangerous builtins.
         # The builtin check is restricted to Load context so legitimate
         # assignment targets (e.g. ``vars = [...]``) are not false-positives,

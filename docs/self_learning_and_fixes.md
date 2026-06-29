@@ -24,10 +24,13 @@ the codebase:
 | **M1** | Medium | `core/canvas.py` | Every generated script did `import ocp_vscode` (never used); if that optional package was absent the **entire pipeline hard-failed** with an unrelated `ModuleNotFoundError`. | Dropped the unused import. |
 | **M3** | Medium | `core/sandbox.py` | Topology counts came from the `Workplane` (selection-dependent) while volume came from the solid — counts could describe a different thing than the measured volume. | All metrics now derive from the resolved solid `Shape` (`val.Faces()/Edges()/Vertices()`). |
 
-Remaining known item (not fixed here, tracked for follow-up): **M5** — the
-"sandbox" is a bare `subprocess` running LLM-generated Python with no real
-isolation (an RCE surface for any hosted/multi-user deployment). Recommend a
-locked-down container or AST allow-listing before any non-local deployment.
+Remaining known item (partially mitigated, tracked for follow-up): **M5** —
+generated CAD still runs in a `subprocess`, so hosted/multi-user deployments
+should add OS-level isolation such as a locked-down container, nsjail, or
+firejail. The current local sandbox is no longer a bare subprocess: it deletes
+stale artifacts, applies AST allow-list validation, blocks common file/process
+I/O escape helpers, scrubs secret-bearing environment variables, and applies
+POSIX resource limits where available.
 
 ---
 

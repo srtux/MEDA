@@ -451,6 +451,38 @@ You have access to the following tool:
                 pass
         return str(png_path), png_bytes
 
+
+    def _save_success_artifacts(self, code: str, context: str = "design loop") -> Optional[str]:
+        """Persist the successful run as an iteration snapshot and render it.
+
+        The sandbox writes canonical ``001.stl``/``001.step`` artifacts. This
+        helper mirrors them into the iteration history, writes the matching
+        Python snapshot, and promotes a fresh render to ``001.png`` through
+        :meth:`render_current_model`. It keeps fast mode, multi-candidate mode,
+        and the agentic loop on the same UI artifact contract.
+        """
+        import shutil
+
+        stl_path = self.sandbox.working_dir / "001.stl"
+        if not stl_path.exists():
+            self.log(f"[WARNING] Cannot save {context} artifacts: 001.stl is missing.")
+            return None
+
+        self.successful_compiles_count += 1
+        iter_prefix = f"001_iter_{self.successful_compiles_count}"
+        try:
+            shutil.copy2(stl_path, self.sandbox.working_dir / f"{iter_prefix}.stl")
+            step_path = self.sandbox.working_dir / "001.step"
+            if step_path.exists():
+                shutil.copy2(step_path, self.sandbox.working_dir / f"{iter_prefix}.step")
+            with open(self.sandbox.working_dir / f"{iter_prefix}.py", "w", encoding="utf-8") as f:
+                f.write(code)
+        except Exception as e:
+            self.log(f"[WARNING] Failed to save {context} iteration files: {e}")
+
+        self.render_current_model(code)
+        return iter_prefix
+
     # ---------------------------------------------------------- learning
     def build_memory_preamble(self, prompt: str) -> str:
         """Build the modeler preamble: retrieved CadQuery API docs + skills + lessons.
@@ -767,11 +799,12 @@ You have access to the following tool:
         success = bool(best and best.success)
         final_code = best.code if best else ""
 
-        # Re-execute the winner so the on-disk artifacts (001.stl/step) and any
-        # render reflect the selected candidate, not the last one generated.
+        # Re-execute the winner so canonical artifacts (001.stl/step/png) and
+        # iteration history reflect the selected candidate, not the last tried one.
         if best and best.code:
             self._execute_and_score_candidate(best.code, constraints)
-            self.successful_compiles_count += 1 if success else 0
+            if success:
+                self._save_success_artifacts(best.code, "candidate search")
 
         final_py_path = self.sandbox.working_dir / "001.py"
         with open(final_py_path, "w", encoding="utf-8") as f:
@@ -1017,16 +1050,7 @@ You have access to the following tool:
                 if res.success:
                     self.log("[LOG] Fast Mode generation success! Script compiled successfully.")
                     success = True
-                    # Save iteration copies
-                    self.successful_compiles_count += 1
-                    iter_prefix = f"001_iter_{self.successful_compiles_count}"
-                    import shutil
-                    try:
-                        shutil.copy2(self.sandbox.working_dir / "001.stl", self.sandbox.working_dir / f"{iter_prefix}.stl")
-                        with open(self.sandbox.working_dir / f"{iter_prefix}.py", "w", encoding="utf-8") as f:
-                            f.write(current_code)
-                    except Exception as e:
-                        self.log(f"[WARNING] Failed to save intermediate iteration files in Fast Mode: {e}")
+                    self._save_success_artifacts(current_code, "Fast Mode")
                     break
                 else:
                     error_log = res.stderr if res.stderr else res.stdout

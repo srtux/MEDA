@@ -118,3 +118,12 @@ def _run():
 
 if __name__ == "__main__":
     _run()
+
+
+def test_blocks_numpy_file_io_helpers():
+    assert validate_code("import numpy as np\nx = np.load('/tmp/secret.npy')") is not None
+    assert validate_code("import numpy as np\nx = np.fromfile('/etc/passwd')") is not None
+
+
+def test_blocks_pathlib_file_io_even_if_import_were_allowed():
+    assert validate_code("from pathlib import Path\nmodel = Path('/etc/passwd').read_text()") is not None
