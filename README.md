@@ -30,6 +30,15 @@ We compare our multi-agent architecture MEDA with recent state-of-the-art CAD ge
 
 MEDA uses an executable multi-agent loop instead of one-shot text-to-code generation. A lead orchestrator delegates parametric feature construction to a modeler agent and verification to a critic agent. The critic compiles CadQuery code in a sandbox, extracts B-Rep topology metrics, renders orthographic views, and feeds failures back into the loop. This makes the generated CAD easier to repair, measure, and reuse.
 
+### Reliability features (June 2026)
+
+Building on the competitive analysis in [`docs/text_to_cad_landscape_2026.md`](docs/text_to_cad_landscape_2026.md), MEDA now borrows the strongest ideas from its open-source and commercial peers (see [`docs/agent_improvements_2026.md`](docs/agent_improvements_2026.md) for the full mapping):
+
+- **CadQuery API grounding (RAG)** — a curated, kernel-verified API reference is retrieved into the modeler's context and exposed as a `lookup_cadquery_api` tool, so the model uses real methods instead of hallucinating them *(from CADSmith)*.
+- **B-Rep selector grounding** — an `inspect_current_model` tool reports the model's real faces/edges (orientations, lengths, selector hints, safe fillet/chamfer ceiling) so advanced features land on geometry that actually exists *(from BRepGround / CADSmith)*.
+- **Parallel candidate search** — generate up to 5 candidates with different modeling strategies and automatically keep the best by compile + geometry + simplicity score *(from EvoCAD)*.
+- **Hardened sandbox** — an AST allow-list, POSIX resource limits, and secret scrubbing close the untrusted-code execution surface, plus cheap CAD-Judge-style validity signals on every build.
+
 ## Research and product roadmap
 
 The next architecture direction is documented in [`docs/architecture_vision.md`](docs/architecture_vision.md), and the self-improving agent strategy is documented in [`docs/self_improving_meda_strategy.md`](docs/self_improving_meda_strategy.md). Key priorities include a structured CAD intermediate representation, constraint solving before code generation, retrieval over successful CAD traces, parallel candidate generation, learned visual reward models, procedural skill memory, and benchmark-driven geometry regression.

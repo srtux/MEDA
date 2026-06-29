@@ -175,6 +175,8 @@ def initialize_session_state():
         st.session_state.session_id = None
     if 'fast_mode' not in st.session_state:
         st.session_state.fast_mode = False
+    if 'num_candidates' not in st.session_state:
+        st.session_state.num_candidates = 1
     if 'selected_iteration_label' not in st.session_state:
         st.session_state.selected_iteration_label = "Latest"
 
@@ -302,8 +304,8 @@ def render_chat_workspace():
                     active_expander = st.expander("Debug Logs (Live)", expanded=False)
                     st.session_state.active_log_placeholder = active_expander.empty()
 
-    # Render Fast Mode toggle and attachment caption in a layout row
-    ctrl_col1, ctrl_col2 = st.columns([2, 1])
+    # Render Fast Mode toggle, candidate-search control, and attachment caption.
+    ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([2, 2, 1])
     with ctrl_col1:
         st.session_state.fast_mode = st.toggle(
             "⚡ Fast Mode (Single-Shot)",
@@ -311,6 +313,13 @@ def render_chat_workspace():
             help="Generate the script in one shot, bypassing the slow multi-agent critique loops. Best for simple shapes."
         )
     with ctrl_col2:
+        st.session_state.num_candidates = st.slider(
+            "🧪 Parallel candidates",
+            min_value=1, max_value=5,
+            value=st.session_state.get("num_candidates", 1),
+            help="Generate this many candidate designs with different modeling strategies and automatically keep the best (compile + geometry + simplicity). 1 = off. Overrides the loop mode when > 1."
+        )
+    with ctrl_col3:
         uploaded_file = st.session_state.get("drawing_uploader")
         if uploaded_file is not None:
             st.caption(f"📎 Attached drawing: `{uploaded_file.name}`")
@@ -981,7 +990,8 @@ def main():
                 image_path=st.session_state.current_image_path,
                 session_id=st.session_state.session_id,
                 keep_canvas=keep_canvas,
-                fast_mode=st.session_state.get("fast_mode", False)
+                fast_mode=st.session_state.get("fast_mode", False),
+                num_candidates=st.session_state.get("num_candidates", 1)
             )
             
             st.session_state.session_id = result.get("session_id")
