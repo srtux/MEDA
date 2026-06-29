@@ -518,10 +518,6 @@ def render_download_buttons():
                 )
 
 
-
-
-
-
 def inject_design_system():
     """Install a lightweight visual design system for the Streamlit interface."""
     st.markdown(

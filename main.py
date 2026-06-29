@@ -16,6 +16,7 @@ def print_header(title: str):
     print(f"{title:^50}")
     print("=" * 50 + "\n")
 
+
 def main():
     """Main terminal loop."""
     load_dotenv()

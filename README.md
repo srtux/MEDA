@@ -32,7 +32,7 @@ MEDA uses an executable multi-agent loop instead of one-shot text-to-code genera
 
 ## Research and product roadmap
 
-The next architecture direction is documented in [`docs/architecture_vision.md`](docs/architecture_vision.md). Key priorities include a structured CAD intermediate representation, constraint solving before code generation, retrieval over successful CAD traces, parallel candidate generation, learned visual reward models, and benchmark-driven geometry regression.
+The next architecture direction is documented in [`docs/architecture_vision.md`](docs/architecture_vision.md), and the self-improving agent strategy is documented in [`docs/self_improving_meda_strategy.md`](docs/self_improving_meda_strategy.md). Key priorities include a structured CAD intermediate representation, constraint solving before code generation, retrieval over successful CAD traces, parallel candidate generation, learned visual reward models, procedural skill memory, and benchmark-driven geometry regression.
 
 For a full competitive map of Text-to-CAD through June 2026 — open source, startups/proprietary products, and academic/industry research — plus where MEDA sits and a prioritized improvement roadmap, see [`docs/text_to_cad_landscape_2026.md`](docs/text_to_cad_landscape_2026.md).
 
