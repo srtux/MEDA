@@ -18,9 +18,11 @@ class Canvas:
     def __init__(self):
         self.parameters: Dict[str, Dict[str, Any]] = {}
         self.features: List[FeatureStep] = []
+        # Note: only import what the generated script actually uses. A stray
+        # `import ocp_vscode` previously hard-failed every sandbox run when that
+        # optional package was absent (bug M1).
         self.imports: List[str] = [
             "import cadquery as cq",
-            "import ocp_vscode"
         ]
         self.history: List[Dict[str, Any]] = []
 

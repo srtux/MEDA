@@ -226,7 +226,21 @@ def render_controls():
                         st.session_state.log_history += msg + "\n"
                         if "log_placeholder" in st.session_state and st.session_state.log_placeholder:
                             st.session_state.log_placeholder.code(st.session_state.log_history, language="log")
-                        
+
+                    # Live per-iteration render placeholder so the user watches
+                    # the model improve each turn.
+                    render_placeholder = st.empty()
+
+                    def streamlit_render_callback(iter_n: int, png_path: str):
+                        try:
+                            render_placeholder.image(
+                                png_path,
+                                caption=f"Iteration {iter_n} — current model",
+                                use_container_width=True,
+                            )
+                        except Exception:
+                            pass
+
                     session_dir = f"NewCADs/run_{int(time.time())}"
                     config = st.session_state.get("llm_config", {})
                     model = config.get("model", "gemini-3.5-flash")
@@ -238,7 +252,8 @@ def render_controls():
                         api_key=key
                     )
                     core.log_callback = streamlit_log_callback
-                    
+                    core.render_callback = streamlit_render_callback
+
                     result = core.run_design_loop(
                         prompt=text_prompt,
                         constraints={},

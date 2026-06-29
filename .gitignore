@@ -39,3 +39,7 @@ Thumbs.db
 # Project-specific
 /NewCADs
 /scratch
+
+# Learning store: commit the seeded DB, ignore runtime WAL/SHM sidecar files
+memory/*.db-wal
+memory/*.db-shm
