@@ -15,10 +15,135 @@ from streamlit_utils.state_manager import StateManager
 from config.llm_config import LLMConfigSelector, process_custom_llm_config
 
 
+def render_custom_llm_config():
+    """Render custom LLM configuration controls in a consistent field order."""
+    model_name = st.text_input("Model name", placeholder="e.g. gemini-2.5-pro")
+    api_type = st.text_input("API type", placeholder="google, azure, openai-compatible")
+    api_key = st.text_input("API key", type="password")
+    base_url = st.text_input("Base URL (optional)") or None
+    api_version = st.text_input("API version (optional)") or None
+    return model_name, api_type, api_key, base_url, api_version
 
 
+def render_llm_config_sidebar():
+    """Render the LLM configuration controls in the sidebar."""
+    with st.sidebar:
+        st.title("⚙️ Model Studio")
+        st.caption("Choose the reasoning model that will plan, code, execute, and critique CAD geometry.")
 
+        selector = LLMConfigSelector()
+        models_to_select = ["Default Gemini",
+                            "Default GPT-4o",
+                            "Default O1", "Text LLM", "Multimodal LLM"]
+        option_selected = st.selectbox("Select model type", models_to_select)
+        st.session_state.selected_model = option_selected
 
+        if st.session_state.selected_model == "Default Gemini":
+            model_info = selector.get_default_model_info("gemini-3.5-flash")
+            api_key = os.environ.get(model_info["api_key"])
+            if not api_key:
+                st.warning(f"Please configure {model_info['api_key']} in your environment, or select another model.")
+                st.session_state.config_created = False
+            else:
+                config = {
+                    "model": model_info["model"],
+                    "api_key": api_key,
+                    "api_type": model_info["api_type"]
+                }
+                st.session_state.llm_config = config
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
+
+        if st.session_state.selected_model == "Default GPT-4o":
+            model_info = selector.get_default_model_info("gpt-4o")
+            api_key = os.environ.get(model_info["api_key"])
+            base_url = os.environ.get(model_info["base_url"])
+            if not api_key or not base_url:
+                st.warning(f"Please configure {model_info['api_key']} and {model_info['base_url']} in your environment, or select another model.")
+                st.session_state.config_created = False
+            else:
+                config = {
+                    "model": model_info["model"],
+                    "api_key": api_key,
+                    "api_type": model_info["api_type"],
+                    "base_url": base_url,
+                    "api_version": model_info["api_version"]
+                }
+                st.session_state.llm_config = config
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
+
+        if st.session_state.selected_model == "Default O1":
+            model_info = selector.get_default_model_info("o1")
+            api_key = os.environ.get(model_info["api_key"])
+            base_url = os.environ.get(model_info["base_url"])
+            if not api_key or not base_url:
+                st.warning(f"Please configure {model_info['api_key']} and {model_info['base_url']} in your environment, or select another model.")
+                st.session_state.config_created = False
+            else:
+                config = {
+                    "model": model_info["model"],
+                    "api_key": api_key,
+                    "api_type": model_info["api_type"],
+                    "base_url": base_url,
+                    "api_version": model_info["api_version"]
+                }
+                st.session_state.llm_config = config
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
+
+        if st.session_state.selected_model == "Text LLM":
+            available_models = selector.get_available_models(False)
+            available_models.append("Custom Model")
+            model_name = st.selectbox("Text only LLMs", available_models)
+            if model_name == "Custom Model":
+                model_name, api_type, api_key, base_url, api_version = render_custom_llm_config()
+                config_custom = process_custom_llm_config(
+                    model_name, api_type, api_key, base_url, api_version)
+                st.session_state.llm_config = config_custom
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
+            else:
+                model_info = selector.get_model_info(model_name)
+                api_key_from_env = selector.get_api_key_from_env(model_name)
+                use_env_key = st.checkbox(
+                    "Use API key from environment", value=bool(api_key_from_env))
+                if use_env_key and api_key_from_env:
+                    api_key = api_key_from_env
+                    st.success("Using API key from environment")
+                else:
+                    api_key = st.text_input("API Key", type="password")
+                config = selector.create_config(model_name, api_key)
+                st.session_state.llm_config = config
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
+
+        if st.session_state.selected_model == "Multimodal LLM":
+            available_models = selector.get_available_models(True)
+            available_models.append("Custom Model")
+            model_name = st.selectbox("Multimodal LLMs", available_models)
+            if model_name == "Custom Model":
+                model_name, api_type, api_key, base_url, api_version = render_custom_llm_config()
+                config_custom = process_custom_llm_config(
+                    model_name, api_type, api_key, base_url, api_version)
+                st.session_state.llm_config = config_custom
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
+
+            else:
+                model_info = selector.get_model_info(model_name)
+                api_key_from_env = selector.get_api_key_from_env(model_name)
+                use_env_key = st.checkbox(
+                    "Use API key from environment", value=bool(api_key_from_env))
+                if use_env_key and api_key_from_env:
+                    api_key = api_key_from_env
+                    st.success("Using API key from environment")
+                else:
+                    api_key = st.text_input("API Key", type="password")
+                config = selector.create_config(model_name, api_key)
+                st.session_state.llm_config = config
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
 
 
 def initialize_session_state():
@@ -56,7 +181,7 @@ def initialize_session_state():
 
 def render_parameter_controls(python_file_path):
     "Render the parameter controls for the CAD model"
-    st.write("### CAD Model Parameters")
+    st.write("### Parametric controls")
 
     if not python_file_path or not Path(python_file_path).exists():
         return
@@ -396,15 +521,71 @@ def render_download_buttons():
 
 
 
+
+def inject_design_system():
+    """Install a lightweight visual design system for the Streamlit interface."""
+    st.markdown(
+        """
+        <style>
+        .stApp {
+            background: radial-gradient(circle at top left, #172554 0, #0f172a 32%, #020617 100%);
+            color: #e5e7eb;
+        }
+        [data-testid="stSidebar"] {
+            background: linear-gradient(180deg, rgba(15,23,42,.98), rgba(30,41,59,.98));
+            border-right: 1px solid rgba(148,163,184,.22);
+        }
+        .hero-card {
+            padding: 1.4rem 1.6rem;
+            border: 1px solid rgba(148,163,184,.25);
+            border-radius: 24px;
+            background: linear-gradient(135deg, rgba(59,130,246,.18), rgba(14,165,233,.08));
+            box-shadow: 0 22px 80px rgba(2,6,23,.35);
+            margin-bottom: 1rem;
+        }
+        .hero-card h1 { margin: 0; font-size: 3rem; letter-spacing: -0.08em; }
+        .hero-card p { color: #bfdbfe; font-size: 1.05rem; margin-bottom: 0; }
+        div.stButton > button, div.stDownloadButton > button {
+            border-radius: 999px;
+            border: 1px solid rgba(125,211,252,.5);
+            background: linear-gradient(135deg, #38bdf8, #6366f1);
+            color: white;
+            font-weight: 700;
+        }
+        [data-testid="stExpander"] {
+            border: 1px solid rgba(148,163,184,.25);
+            border-radius: 18px;
+            background: rgba(15,23,42,.72);
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_hero():
+    """Render the product-facing hero panel."""
+    st.markdown(
+        """
+        <section class="hero-card">
+          <h1>MEDA</h1>
+          <p>Multi-agent, executable CAD synthesis with parametric timelines, sandboxed B-Rep verification, and visual self-critique.</p>
+        </section>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
 def main():
     "Main function to run the Streamlit app"
     st.set_page_config(
         page_title="MEDA | Mechanical Design Agent",
         page_icon="🛠️",
         layout="wide",
-        initial_sidebar_state="collapsed"
+        initial_sidebar_state="expanded"
     )
     initialize_session_state()
+    render_llm_config_sidebar()
 
     # Apply custom modern styling
     custom_css = """
@@ -417,10 +598,6 @@ def main():
         background: #080c14 !important;
     }
 
-    /* Hide standard header, footer, sidebar */
-    [data-testid="collapsedSidebarState"] {
-        display: none;
-    }
     header, footer {
         visibility: hidden;
     }
@@ -646,6 +823,7 @@ def main():
         display: flex !important;
         align-items: center !important;
         justify-content: center !important;
+        padding: 0 !important;
     }
     .st-key-drawing_uploader [data-testid="stFileUploaderDropzoneInstructions"] {
         display: none !important;
