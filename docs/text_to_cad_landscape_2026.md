@@ -110,9 +110,14 @@ FreeCAD-MCP) and the research code/weights/datasets that are actually downloadab
   freeform** (cat, tree, volcano island). Leo AI noted some outputs are
   effectively mesh STL rather than clean parametric solids and that it struggles
   with multi-feature complexity.
-- **vs MEDA:** Zoo is the closest *productized* analog — but it is a closed
-  platform built on a custom DSL (KCL). MEDA is open, uses standard CadQuery, and
-  adds explicit B-Rep metric + multi-view verification that Zoo does not expose.
+- **Open vs closed:** the **client is open** — `KittyCAD/modeling-app` (Zoo Design
+  Studio, MIT, ~1.2k★, very active) and the (now-archived) `text-to-cad-ui` — but
+  the **Text-to-CAD ML models (ml-ephant), the ML API, and the GPU geometry engine
+  are proprietary**. "Open client, closed brain."
+- **vs MEDA:** Zoo is the closest *productized* analog — but the generative model
+  is closed and built on a custom DSL (KCL). MEDA is fully open, uses standard
+  CadQuery, and adds explicit B-Rep metric + multi-view verification that Zoo does
+  not expose.
 
 #### Adam (AdamCAD) — `adam.new`
 - **What:** "CAD copilot for hardware teams." Web text-to-CAD that emits
@@ -300,6 +305,20 @@ direct family in open source:
   **build123d-mcp** (pzfreo, ~25★, Apache-2.0; drove GPT-5.5 to top CADGenBench)
   are the FreeCAD- and build123d-side agentic loops.
 
+Other **multi-agent CadQuery systems directly comparable to MEDA** (mostly
+paper-only):
+- **From Idea to CAD** (Honda Research Institute Europe,
+  [2503.04417](https://arxiv.org/abs/2503.04417)): 3 agents (Requirements →
+  CAD Engineer → QA) with reflexion loops, GPT-4o, CadQuery→STL — the closest
+  architectural twin to MEDA's plan/code/execute/review.
+- **Pro-CAD — "Clarify Before You Draw"** ([2602.03045](https://arxiv.org/abs/2602.03045),
+  ICML 2026; repo `BoYuanVisionary/Pro-CAD`): a *clarifying* agent + a
+  *fine-tuned* coding agent (text→CadQuery), 79.9% Chamfer reduction. Adds the
+  requirement-clarification step MEDA lacks.
+- **text-to-design** (ETH, ICED 2025; `R-SMP/text-to-design`): four agent
+  workflows (zero-shot / step-planning / ask-back / visual-inspection), but on
+  **Rhino/Grasshopper** CSG rather than CadQuery.
+
 ### 5D. MCP / in-app copilot ecosystem
 
 The fastest-growing *open* surface is LLM-agents-drive-the-CAD-app via MCP:
@@ -342,8 +361,13 @@ The fastest-growing *open* surface is LLM-agents-drive-the-CAD-app via MCP:
 | CAD-Coder/MIT ([2505.14646](https://arxiv.org/abs/2505.14646)) | IDETC 2025 | LLaVA-1.5 (image→code) | 100% valid syntax; IoU_best 0.675 |
 | CAD-Coder/Beihang ([2505.19713](https://arxiv.org/abs/2505.19713)) | **NeurIPS 2025** | Qwen2.5-7B SFT+GRPO+CoT | Mean CD 6.54×10³ (−77.7% vs Text2CAD) |
 
-*Adjacent:* CAD-Llama (2505.04481), CADmium (2507.09792), NURBGen (2511.06194),
-GeoCAD (2506.10337), GACO-CAD (2510.17157).
+*Adjacent / also open:* **GenCAD** ([2409.16294](https://arxiv.org/abs/2409.16294),
+image→CAD, autoregressive transformer + latent diffusion; ~3.5k★) ·
+**CADmium** (chandar-lab, [2507.09792](https://arxiv.org/abs/2507.09792), TMLR;
+text→JSON CAD via fine-tuned code LLMs; active to mid-2026) ·
+**OpenECAD** ([2406.09913](https://arxiv.org/abs/2406.09913), compact 0.55–3.1B
+image→construction-commands VLM, MIT) · CAD-Llama (2505.04481) ·
+NURBGen (2511.06194) · GeoCAD (2506.10337) · GACO-CAD (2510.17157).
 
 ### Family B — RL post-training (**the current benchmark frontier**)
 
