@@ -1,10 +1,11 @@
-"Initializes the state manager for the application."
+from typing import Dict, Any
+
 class StateManager:
     """
     Manages the state for the application.
     """
     @staticmethod
-    def get_default_state():
+    def get_default_state() -> Dict[str, Any]:
         "Returns the default state for the application."
         return {
             'stl_timestamp': None,

@@ -3,30 +3,40 @@ import re
 import os
 import sys
 import subprocess
+from typing import Dict
 
 class ParameterHandler:
     """
     A class to handle parameters in a Python file.
     """
-    def __init__(self):
-        self.param_pattern = r"([a-zA-Z_]+)\s*=\s*([0-9.]+)"
+    def __init__(self) -> None:
+        self.param_pattern: str = r"([a-zA-Z_]+)\s*=\s*([0-9.]+)"
     
-    def extract_parameters(self, python_file_path):
+    def extract_parameters(self, python_file_path: str) -> Dict[str, float]:
         "Extract parameters from a Python file"
         try:
-            parameters = {}
+            parameters: Dict[str, float] = {}
+            in_parameters_section = False
             with open(python_file_path, 'r', encoding='utf-8') as file:
                 for line in file:
-                    match = re.search(self.param_pattern, line)
-                    if match:
-                        var_name = match.group(1)
-                        var_value = float(match.group(2))
-                        parameters[var_name] = var_value
+                    stripped_line = line.strip()
+                    if stripped_line == "# === PARAMETERS ===":
+                        in_parameters_section = True
+                        continue
+                    elif stripped_line == "# === MODEL GENERATION ===":
+                        break
+                    
+                    if in_parameters_section:
+                        match = re.search(self.param_pattern, line)
+                        if match:
+                            var_name = match.group(1)
+                            var_value = float(match.group(2))
+                            parameters[var_name] = var_value
             return parameters
         except (IOError, OSError):
             return {}
 
-    def update_python_file(self, python_file_path, new_parameters):
+    def update_python_file(self, python_file_path: str, new_parameters: Dict[str, float]) -> bool:
         "Update parameters in a Python file"
         try:
             with open(python_file_path, 'r', encoding='utf-8') as file:
@@ -42,7 +52,7 @@ class ParameterHandler:
         except (IOError, OSError, subprocess.CalledProcessError):
             return False
 
-    def execute_python_file(self, python_file_path):
+    def execute_python_file(self, python_file_path: str) -> bool:
         "Execute a Python file"
         try:
             file_directory = os.path.dirname(os.path.abspath(python_file_path))

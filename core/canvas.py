@@ -19,8 +19,7 @@ class Canvas:
         self.parameters: Dict[str, Dict[str, Any]] = {}
         self.features: List[FeatureStep] = []
         self.imports: List[str] = [
-            "import cadquery as cq",
-            "import ocp_vscode"
+            "import cadquery as cq"
         ]
         self.history: List[Dict[str, Any]] = []
 
@@ -35,12 +34,10 @@ class Canvas:
 
     def rollback(self) -> bool:
         """Rollbacks the canvas to the previous state. Returns True if successful."""
-        if len(self.history) <= 1:
+        if not self.history:
             return False
-        # Remove current state
-        self.history.pop()
-        # Load previous state
-        prev = self.history[-1]
+        # Load the previous state
+        prev = self.history.pop()
         self.parameters = prev["parameters"]
         self.features = [FeatureStep(f["code"], f["description"]) for f in prev["features"]]
         self.imports = prev["imports"]

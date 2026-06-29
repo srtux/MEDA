@@ -1,5 +1,6 @@
 import os
 import json
+import contextvars
 import time
 import sys
 from pathlib import Path
@@ -24,7 +25,7 @@ from core.reward_engine import RewardEngine
 load_dotenv()
 
 # Global reference to prevent Pydantic serialization of genai.Client through bound instance methods
-_active_core: Optional['ReasoningCADCore'] = None
+_active_core: contextvars.ContextVar[Optional['ReasoningCADCore']] = contextvars.ContextVar('active_core', default=None)
 
 
 # ==========================================
@@ -33,17 +34,17 @@ _active_core: Optional['ReasoningCADCore'] = None
 
 def add_parameter(name: str, value: float, description: str) -> str:
     """Add a named parametric variable (dimension, offset, diameter) to the design."""
-    global _active_core
-    if _active_core:
-        _active_core.canvas.add_parameter(name, value, description)
+    active = _active_core.get()
+    if active:
+        active.canvas.add_parameter(name, value, description)
         return f"Parameter '{name}' added successfully."
     return "Error: No active CAD session."
 
 def set_parameter(name: str, value: float) -> str:
     """Update the value of an existing named parameter."""
-    global _active_core
-    if _active_core:
-        if _active_core.canvas.set_parameter(name, value):
+    active = _active_core.get()
+    if active:
+        if active.canvas.set_parameter(name, value):
             return f"Parameter '{name}' updated to {value}."
         return f"Error: Parameter '{name}' does not exist."
     return "Error: No active CAD session."
@@ -53,27 +54,27 @@ def add_feature(code: str, description: str) -> str:
     Ensure the code assigns to 'model' variable.
     Example: model = cq.Workplane("XY").box(width, length, height)
     """
-    global _active_core
-    if _active_core:
-        _active_core.canvas.add_feature(code, description)
+    active = _active_core.get()
+    if active:
+        active.canvas.add_feature(code, description)
         return f"Feature step appended to timeline."
     return "Error: No active CAD session."
 
 def modify_feature(index: int, code: str, description: str) -> str:
     """Surgically modify or replace an existing feature step in the timeline."""
-    global _active_core
-    if _active_core:
-        _active_core.log(f"[DEBUG_TOOL] modify_feature called with index={index}, features={[f.code for f in _active_core.canvas.features]}")
-        if _active_core.canvas.modify_feature(index, code, description):
+    active = _active_core.get()
+    if active:
+        active.log(f"[DEBUG_TOOL] modify_feature called with index={index}, features={[f.code for f in active.canvas.features]}")
+        if active.canvas.modify_feature(index, code, description):
             return f"Feature step {index} modified successfully."
         return f"Error: Feature step index {index} out of range."
     return "Error: No active CAD session."
 
 def remove_feature(index: int) -> str:
     """Surgically remove an unwanted feature step from the timeline."""
-    global _active_core
-    if _active_core:
-        if _active_core.canvas.remove_feature(index):
+    active = _active_core.get()
+    if active:
+        if active.canvas.remove_feature(index):
             return f"Feature step {index} removed from timeline."
         return f"Error: Feature step index {index} out of range."
     return "Error: No active CAD session."
@@ -82,13 +83,24 @@ def run_cad_execution() -> str:
     """Compile and execute the current CAD script in the sandbox.
     Returns JSON containing success status, stdout/stderr, and topological B-Rep metrics.
     """
-    global _active_core
-    if _active_core:
-        code = _active_core.canvas.to_python_code()
-        res = _active_core.sandbox.execute(code)
+    active = _active_core.get()
+    if active:
+        code = active.canvas.to_python_code()
+        res = active.sandbox.execute(code)
+        
+        if res.success:
+            active.successful_compiles_count += 1
+            iter_prefix = f"001_iter_{active.successful_compiles_count}"
+            import shutil
+            try:
+                shutil.copy2(active.sandbox.working_dir / "001.stl", active.sandbox.working_dir / f"{iter_prefix}.stl")
+                with open(active.sandbox.working_dir / f"{iter_prefix}.py", "w", encoding="utf-8") as f:
+                    f.write(code)
+            except Exception as e:
+                active.log(f"[WARNING] Failed to save intermediate iteration files: {e}")
         
         # Calculate reward internally to provide quick feedback
-        reward, breakdown = RewardEngine.calculate_reward(res.success, res.metrics, _active_core.constraints)
+        reward, breakdown = RewardEngine.calculate_reward(res.success, res.metrics, active.constraints)
         
         if not res.success:
             err_msg = "Compilation failure"
@@ -104,10 +116,10 @@ def run_cad_execution() -> str:
         # Multi-View Visual Critique step
         # If compilation is clean and B-Rep reward is 1.0 (or no constraints were violated), check visual correctness
         if res.success and reward == 1.0:
-            png_path = _active_core.sandbox.working_dir / "001.png"
+            png_path = active.sandbox.working_dir / "001.png"
             try:
-                from utils.capture_screenshot import capture_orthographic_collage
-                capture_orthographic_collage(str(_active_core.sandbox.working_dir / "001.stl"), str(png_path))
+                from utils.capture_screenshot import capture_stl_screenshot
+                capture_stl_screenshot(str(active.sandbox.working_dir / "001.stl"), str(png_path))
                 
                 # Invoke multimodal visual critic to evaluate match alignment
                 visual_critique_system = """
@@ -125,25 +137,25 @@ def run_cad_execution() -> str:
                 from PIL import Image
                 img = Image.open(png_path)
                 
-                critic_resp = _active_core._safe_call(
-                    _active_core.client.models.generate_content,
-                    model=_active_core.model_name,
-                    contents=[img, f"Original prompt: {_active_core.prompt}"],
+                critic_resp = active._safe_call(
+                    active.client.models.generate_content,
+                    model=active.model_name,
+                    contents=[img, f"Original prompt: {active.prompt}"],
                     config=types.GenerateContentConfig(
-                        system_instruction=visual_critique_system,
-                        temperature=0.0,
-                        response_mime_type="application/json"
+                         system_instruction=visual_critique_system,
+                         temperature=0.0,
+                         response_mime_type="application/json"
                     )
                 )
                 critic_data = json.loads(critic_resp.text.strip())
-                _active_core.log(f"[LOG] Visual Critique - Match: {critic_data.get('match')}, Critique: {critic_data.get('critique')}")
+                active.log(f"[LOG] Visual Critique - Match: {critic_data.get('match')}, Critique: {critic_data.get('critique')}")
                 
                 if not critic_data.get("match", False):
                     # Visual fail sets reward back to 0.0 to force correction turn
                     reward = 0.0
                     breakdown["failed_constraints"].append(f"Visual validation failure: {critic_data.get('critique')}")
             except Exception as e:
-                _active_core.log(f"[WARNING] Visual critique step encountered an error: {e}")
+                active.log(f"[WARNING] Visual critique step encountered an error: {e}")
                 reward = 0.0
                 breakdown["failed_constraints"].append(f"Visual critique error: {str(e)}")
 
@@ -157,12 +169,81 @@ def run_cad_execution() -> str:
     return "Error: No active CAD session."
 
 
+from functools import cached_property
+from google.adk.models import Gemini
+
+class RetryingGemini(Gemini):
+    _api_key: Optional[str] = None
+
+    @cached_property
+    def api_client(self) -> genai.Client:
+        # Configure robust HTTP retry options for the GenAI client
+        retry_opts = types.HttpRetryOptions(
+            attempts=8,
+            initial_delay=3.0,
+            max_delay=60.0,
+            http_status_codes=[408, 429, 500, 502, 503, 504]
+        )
+        http_opts = types.HttpOptions(
+            retry_options=retry_opts
+        )
+        if self._api_key:
+            return genai.Client(api_key=self._api_key, http_options=http_opts)
+        return genai.Client(http_options=http_opts)
+
+
 class ReasoningCADCore:
     """Autonomous reasoning agent loop driving CAD design using tool-use feedback."""
+    
+    ORCHESTRATOR_INSTRUCTION = """
+You are the Lead CAD Architect and Coordinator (MEDAOrchestrator). Your objective is to design a 3D CAD model using CadQuery that perfectly matches the user design prompt and satisfies all target constraints.
+
+You do not write code or compile geometry directly. Instead, you coordinate the workflow by delegating tasks to your specialized sub-agents:
+1. **CADModelerAgent**: Delegate to this agent to define parametric variables, write feature code blocks, and surgically modify or remove feature timeline steps.
+2. **VisualCriticAgent**: Delegate to this agent to execute the script in the sandbox, verify geometrical topology metrics (volume, faces, COM), evaluate visual alignment critiques on the rendered views, and verify the final reward.
+
+**Your Delegation Workflow**:
+- Step 1: Hand off to CADModelerAgent to construct the modeling plan, define parameters, and add the initial solid features.
+- Step 2: Hand off to VisualCriticAgent to compile and visually verify the model's metrics.
+- Step 3: Inspect the feedback from VisualCriticAgent. If the reward is 1.0, you are successful! End the loop.
+- Step 4: If the reward is 0.0, analyze the failure reasons (compiler errors or visual critique feedback) and delegate back to CADModelerAgent with clear corrective instructions. Repeat this loop until VisualCriticAgent returns success (reward = 1.0).
+
+Do NOT declare success in a text message to the user until VisualCriticAgent has run and confirmed that the reward is 1.0.
+"""
+
+    MODELER_INSTRUCTION = """
+You are the CAD Modeler Specialist (CADModelerAgent). Your objective is to manage the parametric variables and feature timeline on the canvas.
+
+You have access to the following tools:
+- `add_parameter`: Define a new named variable (dimensions, counts, radii).
+- `set_parameter`: Surgically update the value of an existing named parameter.
+- `add_feature`: Append a new CadQuery CAD code block to the timeline (always modifying the 'model' solid variable).
+- `modify_feature`: Surgically update or replace the code of an existing feature step.
+- `remove_feature`: Surgically remove an unwanted feature step from the timeline.
+
+**Your Workflow**:
+- Define all necessary parameters first.
+- Construct the solid features step-by-step.
+- After making modification changes, return control to your coordinator so the visual critic can compile and verify them. Do not attempt to run verification yourself; you do not have sandbox execution tools.
+"""
+
+    CRITIC_INSTRUCTION = """
+You are the Visual Critic and Verification Specialist (VisualCriticAgent). Your objective is to compile the CAD model, evaluate its topology metrics, and visually analyze its shape alignment.
+
+You have access to the following tool:
+- `run_cad_execution`: Compiles the canvas code, runs it inside the isolated sandbox, generates orthographic screenshot collages, triggers vision-based critiques, and calculates the reward score.
+
+**Your Workflow**:
+- Call `run_cad_execution` to execute the current timeline.
+- Read the output JSON containing the success status, failed constraints, visual critiques, and reward value.
+- Report these findings back to your coordinator. If there are failures, describe them clearly so the modeler can correct them.
+"""
+
     def __init__(self, working_dir: str = "NewCADs", model_name: str = "gemini-3.5-flash", api_key: Optional[str] = None):
         self.canvas = Canvas()
         self.sandbox = Sandbox(working_dir)
         self.model_name = model_name
+        self._api_key_override = api_key
         if api_key:
             self.client = genai.Client(api_key=api_key)
         else:
@@ -170,6 +251,8 @@ class ReasoningCADCore:
         self.constraints: Dict[str, Any] = {}
         self.prompt = ""
         self.log_callback = None
+        self.event_callback = None
+        self.successful_compiles_count = 0
 
     def log(self, message: str):
         print(message, flush=True)
@@ -203,19 +286,68 @@ class ReasoningCADCore:
         prompt: str,
         constraints: Dict[str, Any],
         image_path: Optional[str] = None,
-        max_iterations: int = 100
+        max_iterations: int = 100,
+        session_id: Optional[str] = None,
+        keep_canvas: bool = False,
+        fast_mode: bool = False
     ) -> Dict[str, Any]:
         """Runs the autonomous Chain-of-Thought tool execution loop until the design goal is achieved."""
-        global _active_core
-        _active_core = self
+        _active_core.set(self)
         
-        self.log(f"\n[LOG] Initializing design loop for prompt: '{prompt}'")
+        self.log(f"\n[LOG] Initializing design loop for prompt: '{prompt}' (Fast Mode: {fast_mode})")
         self.log(f"[LOG] Target Constraints: {constraints}")
         if image_path:
             self.log(f"[LOG] Image Path: {image_path}")
         
-        # Reset canvas state
-        self.canvas = Canvas()
+        # Reset canvas state only if not keeping it
+        if not keep_canvas:
+            self.canvas = Canvas()
+        else:
+            # If keeping canvas but canvas is empty, and we have a compiled file, load it as Step 0
+            if len(self.canvas.features) == 0:
+                py_path = self.sandbox.working_dir / "001.py"
+                if py_path.exists():
+                    try:
+                        with open(py_path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                        
+                        # Strip imports and exports from loaded content
+                        lines = content.splitlines()
+                        clean_lines = []
+                        in_model_gen = False
+                        
+                        for line in lines:
+                            stripped = line.strip()
+                            if stripped == "# === MODEL GENERATION ===":
+                                in_model_gen = True
+                                continue
+                            elif stripped == "# === EXPORTS ===":
+                                in_model_gen = False
+                                break
+                            if in_model_gen:
+                                clean_lines.append(line)
+                                
+                        clean_code = "\n".join(clean_lines).strip()
+                        if clean_code:
+                            # Extract parameters if present
+                            in_params = False
+                            for line in lines:
+                                stripped = line.strip()
+                                if stripped == "# === PARAMETERS ===":
+                                    in_params = True
+                                    continue
+                                elif stripped == "# === MODEL GENERATION ===":
+                                    in_params = False
+                                    break
+                                if in_params:
+                                    import re
+                                    match = re.search(r"([a-zA-Z_]+)\s*=\s*([-+]?[0-9.]+)", line)
+                                    if match:
+                                        self.canvas.add_parameter(match.group(1), float(match.group(2)))
+                            
+                            self.canvas.add_feature(clean_code, "Imported base model")
+                    except Exception as e:
+                        self.log(f"[WARNING] Failed to load existing 001.py into canvas: {e}")
         self.prompt = prompt
         
         # Extract/infer constraints from prompt using a simple model call
@@ -252,78 +384,181 @@ class ReasoningCADCore:
 
         # Merge constraints
         self.constraints = {**inferred_constraints, **constraints}
+
+        if fast_mode:
+            self.log("\n[LOG] Fast Mode: Generating CAD model in a single-shot execution...")
+            if self.event_callback:
+                self.event_callback({
+                    "type": "thought",
+                    "author": "MEDAOrchestrator",
+                    "content": "Running in Fast Mode (Single-Shot generation). Bypassing multi-agent loop."
+                })
+            
+            parts = [types.Part.from_text(text=f"Design Goal: {prompt}\nTarget constraints: {json.dumps(self.constraints)}")]
+            if image_path:
+                img_path = Path(image_path)
+                if img_path.exists():
+                    import mimetypes
+                    mime_type, _ = mimetypes.guess_type(img_path)
+                    with open(img_path, "rb") as f:
+                        img_bytes = f.read()
+                    parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime_type or "image/png"))
+            
+            system_instruction = """
+            You are an expert parametric CAD script writer. Your task is to write a complete, self-contained Python script using the CadQuery library to design the requested CAD model.
+            
+            Follow these rules:
+            1. Always import cadquery as cq: `import cadquery as cq`
+            2. Declare all parametric variables (dimensions, offsets, radii, heights) clearly at the top of the script.
+            3. Build the CAD geometry step-by-step.
+            4. Assign the final solid shape or cq.Assembly object to the variable named `model`.
+            5. Export the model at the end:
+               try:
+                   cq.exporters.export(model, '001.stl')
+                   cq.exporters.export(model, '001.step')
+                   print('[COMPILE_SUCCESS]')
+               except Exception as e:
+                   print(f'[EXPORT_ERROR] {e}')
+            6. Return ONLY the raw Python code. Do not wrap it in markdown code blocks or triple backticks.
+            """
+            
+            attempts = 3
+            current_code = ""
+            error_log = ""
+            success = False
+            last_res = None
+            iteration = 0
+            
+            for attempt in range(1, attempts + 1):
+                iteration += 1
+                self.log(f"[LOG] Direct generation attempt {attempt}/{attempts}...")
+                if self.event_callback:
+                    self.event_callback({
+                        "type": "thought",
+                        "author": "CADModelerAgent",
+                        "content": f"Writing and compiling CAD script (Attempt {attempt})..."
+                    })
+                
+                if attempt == 1:
+                    contents = parts
+                else:
+                    contents = [
+                        f"Your previous code failed compilation. Here is the code you generated:\n\n```python\n{current_code}\n```\n\nAnd here is the execution error log:\n\n{error_log}\n\nPlease fix the errors and rewrite the entire script. Ensure it is complete and self-contained."
+                    ]
+                    
+                resp = self._safe_call(
+                    self.client.models.generate_content,
+                    model=self.model_name,
+                    contents=contents,
+                    config=types.GenerateContentConfig(
+                        system_instruction=system_instruction,
+                        temperature=0.2 if attempt > 1 else 0.0
+                    )
+                )
+                
+                text = resp.text.strip()
+                if text.startswith("```"):
+                    lines = text.splitlines()
+                    if lines[0].startswith("```"):
+                        lines = lines[1:]
+                    if lines and lines[-1].startswith("```"):
+                        lines = lines[:-1]
+                    text = "\n".join(lines).strip()
+                
+                current_code = text
+                
+                # Execute in sandbox
+                res = self.sandbox.execute(current_code)
+                last_res = res
+                
+                if res.success:
+                    self.log("[LOG] Fast Mode generation success! Script compiled successfully.")
+                    success = True
+                    # Save iteration copies
+                    self.successful_compiles_count += 1
+                    iter_prefix = f"001_iter_{self.successful_compiles_count}"
+                    import shutil
+                    try:
+                        shutil.copy2(self.sandbox.working_dir / "001.stl", self.sandbox.working_dir / f"{iter_prefix}.stl")
+                        with open(self.sandbox.working_dir / f"{iter_prefix}.py", "w", encoding="utf-8") as f:
+                            f.write(current_code)
+                    except Exception as e:
+                        self.log(f"[WARNING] Failed to save intermediate iteration files in Fast Mode: {e}")
+                    break
+                else:
+                    error_log = res.stderr if res.stderr else res.stdout
+                    self.log(f"[WARNING] Compilation failed: {error_log.strip()}")
+            
+            # Select color
+            suggested_color = "#FF9900"
+            if success:
+                try:
+                    color_system = """
+                    You are a design color coordinator. Given a CAD model description prompt, return a suitable single hex color code (e.g. "#FF0800" for apple, "#8B5A2B" for wood box, "#708090" for steel tube) that represents the typical visual appearance of the object.
+                    Return the result as a raw JSON object containing only a "color" key. Do not include markdown formatting or extra text.
+                    """
+                    resp = self._safe_call(
+                        self.client.models.generate_content,
+                        model=self.model_name,
+                        contents=prompt,
+                        config=types.GenerateContentConfig(
+                            system_instruction=color_system,
+                            temperature=0.0,
+                            response_mime_type="application/json"
+                        )
+                    )
+                    color_data = json.loads(resp.text.strip())
+                    suggested_color = color_data.get("color", "#FF9900")
+                except Exception as e:
+                    self.log(f"[WARNING] Failed to auto-select color: {e}")
+            
+            # Save files
+            final_py_path = self.sandbox.working_dir / "001.py"
+            with open(final_py_path, "w", encoding="utf-8") as f:
+                f.write(current_code)
+            
+            # Clean global pointer
+            _active_core.set(None)
+            
+            return {
+                "success": success,
+                "iterations": iteration,
+                "final_reward": 1.0 if success else 0.0,
+                "final_code": current_code,
+                "metrics": last_res.metrics if last_res else None,
+                "failed_constraints": [error_log] if not success else [],
+                "color": suggested_color,
+                "session_id": session_id
+            }
         
-        # ----------------------------------------------------
-        # SYSTEM INSTRUCTIONS FOR MULTI-AGENT ADK ORCHESTRATION
-        # ----------------------------------------------------
-        
-        orchestrator_instruction = """
-You are the Lead CAD Architect and Coordinator (MEDAOrchestrator). Your objective is to design a 3D CAD model using CadQuery that perfectly matches the user design prompt and satisfies all target constraints.
-
-You do not write code or compile geometry directly. Instead, you coordinate the workflow by delegating tasks to your specialized sub-agents:
-1. **CADModelerAgent**: Delegate to this agent to define parametric variables, write feature code blocks, and surgically modify or remove feature timeline steps.
-2. **VisualCriticAgent**: Delegate to this agent to execute the script in the sandbox, verify geometrical topology metrics (volume, faces, COM), evaluate visual alignment critiques on the rendered views, and verify the final reward.
-
-**Your Delegation Workflow**:
-- Step 1: Hand off to CADModelerAgent to construct the modeling plan, define parameters, and add the initial solid features.
-- Step 2: Hand off to VisualCriticAgent to compile and visually verify the model's metrics.
-- Step 3: Inspect the feedback from VisualCriticAgent. If the reward is 1.0, you are successful! End the loop.
-- Step 4: If the reward is 0.0, analyze the failure reasons (compiler errors or visual critique feedback) and delegate back to CADModelerAgent with clear corrective instructions. Repeat this loop until VisualCriticAgent returns success (reward = 1.0).
-
-Do NOT declare success in a text message to the user until VisualCriticAgent has run and confirmed that the reward is 1.0.
-"""
-
-        modeler_instruction = """
-You are the CAD Modeler Specialist (CADModelerAgent). Your objective is to manage the parametric variables and feature timeline on the canvas.
-
-You have access to the following tools:
-- `add_parameter`: Define a new named variable (dimensions, counts, radii).
-- `set_parameter`: Surgically update the value of an existing named parameter.
-- `add_feature`: Append a new CadQuery CAD code block to the timeline (always modifying the 'model' solid variable).
-- `modify_feature`: Surgically update or replace the code of an existing feature step.
-- `remove_feature`: Surgically remove an unwanted feature step from the timeline.
-
-**Your Workflow**:
-- Define all necessary parameters first.
-- Construct the solid features step-by-step.
-- After making modification changes, return control to your coordinator so the visual critic can compile and verify them. Do not attempt to run verification yourself; you do not have sandbox execution tools.
-"""
-
-        critic_instruction = """
-You are the Visual Critic and Verification Specialist (VisualCriticAgent). Your objective is to compile the CAD model, evaluate its topology metrics, and visually analyze its shape alignment.
-
-You have access to the following tool:
-- `run_cad_execution`: Compiles the canvas code, runs it inside the isolated sandbox, generates orthographic screenshot collages, triggers vision-based critiques, and calculates the reward score.
-
-**Your Workflow**:
-- Call `run_cad_execution` to execute the current timeline.
-- Read the output JSON containing the success status, failed constraints, visual critiques, and reward value.
-- Report these findings back to your coordinator. If there are failures, describe them clearly so the modeler can correct them.
-"""
+        # Instantiate the retrying Gemini wrapper for ADK
+        model_wrapper = RetryingGemini(model=self.model_name)
+        if getattr(self, "_api_key_override", None):
+            model_wrapper._api_key = self._api_key_override
 
         # Setup specialized sub-agents
         modeler_agent = LlmAgent(
             name="CADModelerAgent",
-            model=self.model_name,
+            model=model_wrapper,
             description="CAD modeler specialist that defines parameters and updates timeline features",
-            instruction=modeler_instruction,
+            instruction=self.MODELER_INSTRUCTION,
             tools=[add_parameter, set_parameter, add_feature, modify_feature, remove_feature]
         )
 
         critic_agent = LlmAgent(
             name="VisualCriticAgent",
-            model=self.model_name,
+            model=model_wrapper,
             description="Verification specialist that compiles CAD models and runs visual checks",
-            instruction=critic_instruction,
+            instruction=self.CRITIC_INSTRUCTION,
             tools=[run_cad_execution]
         )
 
         # Setup main orchestrator agent
         orchestrator_agent = LlmAgent(
             name="MEDAOrchestrator",
-            model=self.model_name,
+            model=model_wrapper,
             description="Lead orchestrator agent that coordinates the design loop using handoffs",
-            instruction=orchestrator_instruction,
+            instruction=self.ORCHESTRATOR_INSTRUCTION,
             sub_agents=[modeler_agent, critic_agent]
         )
 
@@ -350,7 +585,8 @@ You have access to the following tool:
                 self.log(f"[LOG] Loaded image context: {image_path}")
 
         new_message = types.Content(role="user", parts=parts)
-        session_id = f"session_{int(time.time())}"
+        if not session_id:
+            session_id = f"session_{int(time.time())}"
 
         current_reward = 0.0
         last_execution_result = {}
@@ -373,16 +609,46 @@ You have access to the following tool:
                         if hasattr(part, "text") and part.text:
                             author_label = f"[{event.author}]" if event.author else "[Agent]"
                             self.log(f"{author_label} {part.text}")
+                            if self.event_callback:
+                                self.event_callback({
+                                    "type": "thought",
+                                    "author": event.author,
+                                    "content": part.text
+                                })
                 
                 # Log agent transfers
                 if event.actions and event.actions.transfer_to_agent:
-                    self.log(f"\n[TRANSFER] Handoff from '{event.author}' to '{event.actions.transfer_to_agent}'")
+                    transfer_msg = f"Handoff from '{event.author}' to '{event.actions.transfer_to_agent}'"
+                    self.log(f"\n[TRANSFER] {transfer_msg}")
+                    if self.event_callback:
+                        self.event_callback({
+                            "type": "handoff",
+                            "author": event.author,
+                            "content": transfer_msg
+                        })
                 
                 # Log function call triggers
                 func_calls = event.get_function_calls()
                 if func_calls:
                     for call in func_calls:
-                        self.log(f"[{event.author} TOOL_CALL] Executing: {call.name} with arguments: {call.args}")
+                        call_msg = f"Executing: {call.name} with arguments: {call.args}"
+                        self.log(f"[{event.author} TOOL_CALL] {call_msg}")
+                        
+                        code = None
+                        title = call.name
+                        if call.name in ["add_feature", "modify_feature"]:
+                            code = call.args.get("code")
+                            title = call.args.get("description", "Adding feature step")
+                            
+                        if self.event_callback:
+                            self.event_callback({
+                                "type": "tool_call",
+                                "author": event.author,
+                                "name": call.name,
+                                "title": title,
+                                "content": call_msg,
+                                "code": code
+                            })
                 
                 # Log function responses and inspect run_cad_execution outputs
                 func_responses = event.get_function_responses()
@@ -391,13 +657,28 @@ You have access to the following tool:
                         val = resp.response.get("result") if resp.response else ""
                         res_str = str(val) if val is not None else ""
                         self.log(f"[{event.author} TOOL_RESPONSE] {res_str[:300]}...")
+                        
+                        reward = None
+                        failed_constraints = []
                         if resp.name == "run_cad_execution":
                             try:
                                 exec_data = json.loads(res_str)
                                 current_reward = exec_data.get("reward", 0.0)
                                 last_execution_result = exec_data
+                                reward = current_reward
+                                failed_constraints = exec_data.get("failed_constraints", [])
                             except Exception:
                                 pass
+                                
+                        if self.event_callback:
+                            self.event_callback({
+                                "type": "tool_response",
+                                "author": event.author,
+                                "name": resp.name,
+                                "content": f"{res_str[:300]}...",
+                                "reward": reward,
+                                "failed_constraints": failed_constraints
+                            })
 
         # Run the async loop synchronously
         import asyncio
@@ -450,7 +731,7 @@ You have access to the following tool:
             json.dump(diagnostic, f, indent=2)
 
         # Clean global pointer
-        _active_core = None
+        _active_core.set(None)
             
         return {
             "success": current_reward == 1.0,
@@ -459,5 +740,6 @@ You have access to the following tool:
             "final_code": final_code,
             "metrics": last_execution_result.get("metrics"),
             "failed_constraints": last_execution_result.get("failed_constraints", []),
-            "color": suggested_color
+            "color": suggested_color,
+            "session_id": session_id
         }

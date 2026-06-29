@@ -2,11 +2,13 @@
 import os
 import tempfile
 from pathlib import Path
+from typing import Optional
+from streamlit.runtime.uploaded_file_manager import UploadedFile
 
 class FileHandler:
     """Class to handle file operations for Streamlit uploads."""
     @staticmethod
-    def save_uploaded_file(uploaded_file):
+    def save_uploaded_file(uploaded_file: UploadedFile) -> Optional[str]:
         "Save the uploaded file to a temporary directory"
         try:
             temp_dir = Path(tempfile.gettempdir()) / "streamlit_uploads"
@@ -24,7 +26,7 @@ class FileHandler:
             return None
 
     @staticmethod
-    def cleanup_temp_files(file_path):
+    def cleanup_temp_files(file_path: Optional[str]) -> None:
         "Remove the temporary file"
         if file_path and os.path.exists(file_path):
             try:
