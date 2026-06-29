@@ -75,12 +75,15 @@ SEED_LESSONS = [
 ]
 
 # (name, goal_description, signature, code_template)
+# Every snippet below has been executed against CadQuery 2.8.0 (see
+# tests/test_seed_skills.py) so the seeds are known-valid, not hallucinated.
 SEED_SKILLS = [
+    # --- base primitives -------------------------------------------------
     (
         "base_box",
         "Create a rectangular base solid (plate or block) bound to `model`.",
-        "(width, length, height)",
-        "model = cq.Workplane('XY').box(width, length, height)",
+        "(length, width, height)",
+        "model = cq.Workplane('XY').box(length, width, height)",
     ),
     (
         "base_cylinder",
@@ -89,22 +92,41 @@ SEED_SKILLS = [
         "model = cq.Workplane('XY').circle(radius).extrude(height)",
     ),
     (
+        "base_sphere",
+        "Create a spherical base solid bound to `model`.",
+        "(radius)",
+        "model = cq.Workplane('XY').sphere(radius)",
+    ),
+    (
+        "regular_polygon_prism",
+        "Extrude a regular n-sided polygon into a prism (hex/oct stock, nuts).",
+        "(n_sides, circumradius, height)",
+        "model = cq.Workplane('XY').polygon(n_sides, 2*circumradius).extrude(height)",
+    ),
+    (
+        "hollow_tube",
+        "Create a hollow tube/pipe by extruding an annulus (outer minus inner circle).",
+        "(outer_d, inner_d, height)",
+        "model = cq.Workplane('XY').circle(outer_d/2).circle(inner_d/2).extrude(height)",
+    ),
+    # --- holes -----------------------------------------------------------
+    (
         "centered_through_hole",
         "Drill a centered through-hole through the top face of the current solid.",
         "(diameter)",
         "model = model.faces('>Z').workplane().hole(diameter)",
     ),
     (
-        "fillet_all_edges",
-        "Round (fillet) all edges of the current solid by a given radius.",
-        "(radius)",
-        "model = model.edges().fillet(radius)",
+        "counterbore_hole",
+        "Drill a counterbored hole (flat-bottom recess for a socket-head cap screw).",
+        "(hole_d, cbore_d, cbore_depth)",
+        "model = model.faces('>Z').workplane().cboreHole(hole_d, cbore_d, cbore_depth)",
     ),
     (
-        "chamfer_top_edges",
-        "Chamfer the edges of the top face of the current solid.",
-        "(distance)",
-        "model = model.faces('>Z').edges().chamfer(distance)",
+        "countersink_hole",
+        "Drill a countersunk hole (conical recess for a flat-head screw).",
+        "(hole_d, csink_d, angle)",
+        "model = model.faces('>Z').workplane().cskHole(hole_d, csink_d, angle)",
     ),
     (
         "rect_hole_pattern",
@@ -114,11 +136,59 @@ SEED_SKILLS = [
         "         .rarray(x_spacing, y_spacing, x_count, y_count)\n"
         "         .hole(diameter))",
     ),
+    # --- edge treatments -------------------------------------------------
+    (
+        "fillet_all_edges",
+        "Round (fillet) all edges of the current solid by a given radius.",
+        "(radius)",
+        "model = model.edges().fillet(radius)",
+    ),
+    (
+        "chamfer_all_edges",
+        "Chamfer all edges of the current solid by a given distance.",
+        "(distance)",
+        "model = model.edges().chamfer(distance)",
+    ),
+    (
+        "chamfer_top_edges",
+        "Chamfer only the edges of the top face of the current solid.",
+        "(distance)",
+        "model = model.faces('>Z').edges().chamfer(distance)",
+    ),
+    # --- shells & advanced features -------------------------------------
     (
         "shell_open_top",
-        "Hollow the solid into a shell, removing the top face.",
+        "Hollow the solid into a shell (container), removing the top face.",
         "(thickness)",
         "model = model.faces('>Z').shell(-thickness)",
+    ),
+    (
+        "revolve_profile",
+        "Revolve an L-shaped profile 360 degrees into a solid of revolution (disc/ring).",
+        "(radius, height)",
+        "model = (cq.Workplane('XZ')\n"
+        "         .lineTo(radius, 0).lineTo(radius, height).lineTo(0, height)\n"
+        "         .close().revolve(360))",
+    ),
+    (
+        "loft_taper",
+        "Loft from a rectangular base to a circular top (tapered transition/funnel).",
+        "(length, width, height, radius)",
+        "model = (cq.Workplane('XY').rect(length, width)\n"
+        "         .workplane(offset=height).circle(radius)\n"
+        "         .loft(combine=True))",
+    ),
+    (
+        "union_two_solids",
+        "Boolean-union a second solid onto the current model (combine parts).",
+        "(other_solid)",
+        "model = model.union(other_solid)",
+    ),
+    (
+        "mirror_about_plane",
+        "Mirror the current solid across a plane and keep both halves (symmetric parts).",
+        "(plane)  # e.g. 'XZ', 'YZ', 'XY'",
+        "model = model.mirror('XZ', union=True)",
     ),
 ]
 
