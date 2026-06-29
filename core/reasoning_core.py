@@ -159,11 +159,14 @@ def run_cad_execution() -> str:
 
 class ReasoningCADCore:
     """Autonomous reasoning agent loop driving CAD design using tool-use feedback."""
-    def __init__(self, working_dir: str = "NewCADs"):
+    def __init__(self, working_dir: str = "NewCADs", model_name: str = "gemini-3.5-flash", api_key: Optional[str] = None):
         self.canvas = Canvas()
         self.sandbox = Sandbox(working_dir)
-        self.client = genai.Client()
-        self.model_name = "gemini-3.5-flash"
+        self.model_name = model_name
+        if api_key:
+            self.client = genai.Client(api_key=api_key)
+        else:
+            self.client = genai.Client()
         self.constraints: Dict[str, Any] = {}
         self.prompt = ""
         self.log_callback = None

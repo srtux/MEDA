@@ -228,7 +228,17 @@ def render_controls():
                             st.session_state.log_placeholder.code(st.session_state.log_history, language="log")
                         
                     session_dir = f"NewCADs/run_{int(time.time())}"
-                    core = ReasoningCADCore(working_dir=session_dir)
+                    config = st.session_state.get("llm_config", {})
+                    model = config.get("model", "gemini-3.5-flash")
+                    if "gemini" not in model.lower():
+                        model = "gemini-3.5-flash"
+                    key = config.get("api_key")
+                    
+                    core = ReasoningCADCore(
+                        working_dir=session_dir,
+                        model_name=model,
+                        api_key=key
+                    )
                     core.log_callback = streamlit_log_callback
                     
                     result = core.run_design_loop(
