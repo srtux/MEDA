@@ -96,8 +96,7 @@ def handle_design_process(config: Dict, selected_model: str) -> None:
     text_prompt, image_path = get_design_input(selected_model != "Text LLM")
 
     # Combine prompts if image path is provided
-    final_prompt = f"{text_prompt}\nImage: {
-        image_path}" if image_path else text_prompt
+    final_prompt = f"{text_prompt}\nImage: {image_path}" if image_path else text_prompt
 
     print("\nProcessing design request...")
     try:
@@ -120,7 +119,7 @@ def main():
         print_header("LLM Configuration and Design Chat")
 
         # Model type selection
-        models_to_select = ["Default GPT-40", "Default O1",
+        models_to_select = ["Default GPT-4o", "Default O1",
                             "Text LLM", "Multimodal LLM", "Exit"]
         selected_model = get_user_choice(
             models_to_select, "Select Model Type:")
@@ -130,8 +129,8 @@ def main():
             break
 
         # Configuration setup
-        if selected_model in ["Default GPT-40", "Default O1"]:
-            model_key = "gpt-4o" if selected_model == "Default GPT-40" else "o1"
+        if selected_model in ["Default GPT-4o", "Default O1"]:
+            model_key = "gpt-4o" if selected_model == "Default GPT-4o" else "o1"
             model_info = selector.get_default_model_info(model_key)
             config = {
                 "model": model_info["model"],
