@@ -69,10 +69,14 @@ deduplication (merge near-duplicates), Laplace-smoothed confidence, exponential
 time decay, a confidence floor on retrieval, and per-table eviction.
 
 **Seed knowledge.** `memory/seed_memory.py` ships 6 starter lessons (common
-CadQuery failure modes) and 7 starter skills (base box/cylinder, centered hole,
-fillet/chamfer, hole pattern, shell). The seeded `memory/meda_memory.db` is
-committed so a fresh clone starts informed. Regenerate with
-`python memory/seed_memory.py`.
+CadQuery failure modes) and **17 starter skills** spanning primitives (box,
+cylinder, sphere, polygon prism, hollow tube), holes (through, counterbore,
+countersink, grid pattern), edge treatments (fillet/chamfer all or top edges),
+and advanced features (shell/container, revolve, loft, union, mirror). Every
+skill snippet is executed against CadQuery 2.8.0 by
+`tests/test_seed_skills.py`, so the seeds are **known-valid, not hallucinated**.
+The seeded `memory/meda_memory.db` is committed so a fresh clone starts
+informed. Regenerate with `python memory/seed_memory.py`.
 
 ### Research grounding
 - **Voyager** — skill library of executable code + self-verification. [arXiv:2305.16291](https://arxiv.org/abs/2305.16291)
