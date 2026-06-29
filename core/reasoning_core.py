@@ -23,6 +23,7 @@ from core.sandbox import Sandbox
 from core.reward_engine import RewardEngine
 from core.learning_store import LearningStore
 from core.lesson_signature import to_signature
+from core.memory import CADMemoryStore
 
 load_dotenv()
 
@@ -309,6 +310,7 @@ You have access to the following tool:
         self._prev_failed_sigs: set = set()
         self._prev_detail: Dict[str, str] = {}
         self._prev_reward: float = 0.0
+        self.memory_store = CADMemoryStore()
 
     def _reset_run_state(self):
         self.render_iter = 0
@@ -791,6 +793,15 @@ Do not include markdown formatting.
                 "color": suggested_color,
                 "session_id": session_id
             }
+        retrieved_memories = self.memory_store.retrieve(prompt)
+        memory_guidance = ""
+        if retrieved_memories:
+            memory_lines = [
+                f"- {memory.tip} (prior outcome: {memory.outcome})"
+                for memory in retrieved_memories
+            ]
+            memory_guidance = "\nRelevant lessons from prior CAD trajectories:\n" + "\n".join(memory_lines)
+            self.log(f"[LOG] Retrieved {len(retrieved_memories)} trajectory memories for this prompt.")
         
         # Instantiate the retrying Gemini wrapper for ADK
         model_wrapper = RetryingGemini(model=self.model_name)
@@ -865,7 +876,7 @@ Do not include markdown formatting.
         )
 
         # Build parts for initial message
-        parts = [types.Part.from_text(text=f"Design Goal: {prompt}\nTarget constraints: {json.dumps(self.constraints)}")]
+        parts = [types.Part.from_text(text=f"Design Goal: {prompt}\nTarget constraints: {json.dumps(self.constraints)}{memory_guidance}")]
         if image_path:
             img_path = Path(image_path)
             if img_path.exists():
@@ -1045,6 +1056,17 @@ Do not include markdown formatting.
         diagnostic_path = self.sandbox.working_dir / "diagnostic.json"
         with open(diagnostic_path, "w", encoding="utf-8") as f:
             json.dump(diagnostic, f, indent=2)
+
+        try:
+            self.memory_store.record_run(
+                prompt=prompt,
+                success=current_reward == 1.0,
+                metrics=last_execution_result.get("metrics"),
+                failed_constraints=last_execution_result.get("failed_constraints", []),
+            )
+            self.log("[LOG] Stored trajectory memory for future self-improvement.")
+        except Exception as e:
+            self.log(f"[WARNING] Failed to store trajectory memory: {e}")
 
         # Clean global pointer
         _active_core.set(None)
