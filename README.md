@@ -58,10 +58,8 @@ We use **`uv`** for lightweight Python virtual environment and dependency manage
     uv sync
     ```
 
-3.  **Activate Virtual Environment**:
-    ```bash
-    source .venv/bin/activate
-    ```
+> [!TIP]
+> With `uv`, you do not need to manually activate the virtual environment. Any command prefixed with `uv run` will automatically run within the correct environment.
 
 ### 3. API Configuration
 
@@ -87,11 +85,11 @@ We use **`uv`** for lightweight Python virtual environment and dependency manage
 ### 4. **Run the Application**
 - For command line application:
    ```bash
-   python main.py
+   uv run python main.py
    ```
 - For streamlit app:
    ```bash
-   streamlit run streamlitapp.py
+   uv run streamlit run streamlitapp.py
    ```
 You can insert the api key for different models with streamlit app.
 Then, follow the on-screen instructions to interact with MEDA.
