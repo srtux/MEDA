@@ -829,6 +829,9 @@ Do not include markdown formatting.
             memory_guidance = "\nRelevant lessons from prior CAD trajectories:\n" + "\n".join(memory_lines)
             self.log(f"[LOG] Retrieved {len(retrieved_memories)} trajectory memories for this prompt.")
         
+        modeler_instruction = self.MODELER_INSTRUCTION
+        critic_instruction = self.CRITIC_INSTRUCTION
+
         # Instantiate the retrying Gemini wrapper for ADK
         model_wrapper = RetryingGemini(model=self.model_name)
         if getattr(self, "_api_key_override", None):
