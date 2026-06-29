@@ -1,14 +1,14 @@
 "Run this script to start the Streamlit app to create CAD models"
 import os
+from dotenv import load_dotenv
+load_dotenv()
 import time
 from pathlib import Path
 
 import streamlit as st
 from streamlit_stl import stl_from_file
 
-from MEDA.text_and_multi_chats import (designers_chat,
-                                             multimodal_designers_chat)
-from MEDA.create_agents import create_mechdesign_agents
+from core.reasoning_core import ReasoningCADCore
 from streamlit_utils.file_handler import FileHandler
 from streamlit_utils.parameter_handler import ParameterHandler
 from streamlit_utils.prompt_builder import PromptBuilder
@@ -33,37 +33,65 @@ def render_llm_config_sidebar():
         st.title("LLM Configuration")
 
         selector = LLMConfigSelector()
-        models_to_select = ["Default GPT-40",
+        models_to_select = ["Default Gemini 3.5 Flash",
+                            "Default GPT-40",
                             "Default O1", "Text LLM", "Multimodal LLM"]
         option_selected = st.selectbox("Select Model Type", models_to_select)
         st.session_state.selected_model = option_selected
+
+        if st.session_state.selected_model == "Default Gemini 3.5 Flash":
+            model_info = selector.get_default_model_info("gemini-3.5-flash")
+            api_key = os.environ.get(model_info["api_key"])
+            if not api_key:
+                st.warning(f"Please configure {model_info['api_key']} in your environment, or select another model.")
+                st.session_state.config_created = False
+            else:
+                config = {
+                    "model": model_info["model"],
+                    "api_key": api_key,
+                    "api_type": model_info["api_type"]
+                }
+                st.session_state.llm_config = config
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
+
         if st.session_state.selected_model == "Default GPT-40":
             model_info = selector.get_default_model_info("gpt-4o")
-            config = {
-                "model": model_info["model"],
-                "api_key": os.environ[model_info["api_key"]],
-                "api_type": model_info["api_type"],
-                "base_url": os.environ[model_info["base_url"]],
-                "api_version": model_info["api_version"]
-
-            }
-            st.session_state.llm_config = config
-            st.session_state.config_created = True
-            st.success("Configuration created successfully!")
+            api_key = os.environ.get(model_info["api_key"])
+            base_url = os.environ.get(model_info["base_url"])
+            if not api_key or not base_url:
+                st.warning(f"Please configure {model_info['api_key']} and {model_info['base_url']} in your environment, or select another model.")
+                st.session_state.config_created = False
+            else:
+                config = {
+                    "model": model_info["model"],
+                    "api_key": api_key,
+                    "api_type": model_info["api_type"],
+                    "base_url": base_url,
+                    "api_version": model_info["api_version"]
+                }
+                st.session_state.llm_config = config
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
 
         if st.session_state.selected_model == "Default O1":
             model_info = selector.get_default_model_info("o1")
-            config = {
-                "model": model_info["model"],
-                "api_key": os.environ[model_info["api_key"]],
-                "api_type": model_info["api_type"],
-                "base_url": os.environ[model_info["base_url"]],
-                "api_version": model_info["api_version"]
-
-            }
-            st.session_state.llm_config = config
-            st.session_state.config_created = True
-            st.success("Configuration created successfully!")
+            api_key = os.environ.get(model_info["api_key"])
+            base_url = os.environ.get(model_info["base_url"])
+            if not api_key or not base_url:
+                st.warning(f"Please configure {model_info['api_key']} and {model_info['base_url']} in your environment, or select another model.")
+                st.session_state.config_created = False
+            else:
+                config = {
+                    "model": model_info["model"],
+                    "api_key": api_key,
+                    "api_type": model_info["api_type"],
+                    "base_url": base_url,
+                    "api_version": model_info["api_version"]
+                }
+                st.session_state.llm_config = config
+                st.session_state.config_created = True
+                st.success("Configuration created successfully!")
 
         if st.session_state.selected_model == "Text LLM":
             available_models = selector.get_available_models(False)
@@ -133,6 +161,8 @@ def initialize_session_state():
             st.session_state[key] = value
     if st.session_state.stl_timestamp is None:
         st.session_state.stl_timestamp = time.time()
+    if 'log_history' not in st.session_state:
+        st.session_state.log_history = ""
 
 
 def render_parameter_controls(python_file_path):
@@ -169,19 +199,7 @@ def render_parameter_controls(python_file_path):
 
 def render_controls():
     "Render the main controls for the Streamlit app"
-    agents_list = \
-        create_mechdesign_agents(st.session_state.llm_config)
-    multimodal_agents = [agents_list[0],
-                        agents_list[1],
-                        agents_list[2],
-                        agents_list[3],
-                        agents_list[4],
-                        agents_list[6]]
-    text_agents = [agents_list[0],
-                    agents_list[1],
-                    agents_list[2],
-                    agents_list[3],
-                    agents_list[4],]
+
     text_prompt = st.text_input("Let's design",
                                 value=st.session_state.prompt,
                                 placeholder="Enter a text prompt here",
@@ -192,30 +210,41 @@ def render_controls():
             "Upload an engineering drawing image", type=["png", "jpg", "jpeg"])
 
     if uploaded_file is not None:
-        image_path = FileHandler.save_uploaded_file(uploaded_file)
-        if image_path and Path(image_path).exists():
-            st.session_state.current_image_path = image_path
-            st.image(image_path, caption="Uploaded Image",
+        if not st.session_state.current_image_path or not Path(st.session_state.current_image_path).exists():
+            st.session_state.current_image_path = FileHandler.save_uploaded_file(uploaded_file)
+        if st.session_state.current_image_path and Path(st.session_state.current_image_path).exists():
+            st.image(st.session_state.current_image_path, caption="Uploaded Image",
                      use_container_width=True)
 
     if st.button("Generate CAD Model"):
-        final_prompt = PromptBuilder.build_prompt(
-            text_prompt, st.session_state.current_image_path)
-        if final_prompt:
+        if text_prompt:
             with st.spinner("Generating CAD model..."):
                 try:
-                    if st.session_state.selected_model == "Text LLM" or uploaded_file is None:
-                        generated_files = designers_chat(
-                            text_agents, st.session_state.llm_config, final_prompt)
+                    st.session_state.log_history = ""
+                    
+                    def streamlit_log_callback(msg: str):
+                        st.session_state.log_history += msg + "\n"
+                        if "log_placeholder" in st.session_state and st.session_state.log_placeholder:
+                            st.session_state.log_placeholder.code(st.session_state.log_history, language="log")
+                        
+                    session_dir = f"NewCADs/run_{int(time.time())}"
+                    core = ReasoningCADCore(working_dir=session_dir)
+                    core.log_callback = streamlit_log_callback
+                    
+                    result = core.run_design_loop(
+                        prompt=text_prompt,
+                        constraints={},
+                        image_path=st.session_state.current_image_path
+                    )
+                    if result["success"]:
+                        st.session_state.generated_py_file = f"{session_dir}/001.py"
+                        st.session_state.current_stl_path = f"{session_dir}/001.stl"
+                        if "color" in result and result["color"]:
+                            st.session_state.color = result["color"]
+                        st.rerun()
                     else:
-                        generated_files = multimodal_designers_chat(
-                            multimodal_agents, st.session_state.llm_config, final_prompt)
-                    st.session_state.generated_py_file = generated_files.get(
-                        'py')
-                    st.session_state.current_stl_path = generated_files.get(
-                        'stl')
-                    st.rerun()
-                except (FileNotFoundError, ValueError) as e:
+                        st.warning("Design loop completed with failures. Inspect the trace log below for details.")
+                except Exception as e:
                     st.error(f"Error generating CAD model: {str(e)}")
 
 
@@ -307,12 +336,15 @@ def main():
     st.set_page_config(layout="wide")
     initialize_session_state()
 
-    if st.session_state.current_image_path:
-        FileHandler.cleanup_temp_files(st.session_state.current_image_path)
+
     render_llm_config_sidebar()
     st.title("MEDA")
 
     left_col, middle_col, right_col = st.columns([0.75, 2, 0.5])
+
+    if not st.session_state.config_created or not st.session_state.llm_config:
+        st.info("👈 Please select and configure your LLM settings in the sidebar to get started.")
+        return
 
     with left_col:
         render_controls()
@@ -321,9 +353,17 @@ def main():
         render_stl_viewer()
         render_download_buttons()
         render_example_prompts()
+        
     with right_col:
         if st.session_state.generated_py_file:
             render_parameter_controls(st.session_state.generated_py_file)
+
+    # Full-width persistent log expander at the bottom of the page
+    st.write("---")
+    log_expander = st.expander("Real-time Agent Log Trace", expanded=True)
+    st.session_state.log_placeholder = log_expander.empty()
+    if st.session_state.log_history:
+        st.session_state.log_placeholder.code(st.session_state.log_history, language="log")
 
 
 if __name__ == "__main__":

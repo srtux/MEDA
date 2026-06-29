@@ -1,6 +1,41 @@
-/tests/results
-/tmp
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
 ./_pycache_
 **/__pycache__
+
+# C extensions
+*.so
+
+# Environments
+venv/
+.venv/
+env/
+ENV/
+*.venv
+
+# Unit test / coverage / cache
+/tests/results
+/tmp
 /.cache
+.pytest_cache/
+htmlcov/
+.tox/
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# IDEs
+.vscode/
+.idea/
+
+# Project-specific
 /NewCADs
+/scratch

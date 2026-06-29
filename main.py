@@ -1,5 +1,7 @@
 "Terminal app for mechdesign agents"
 import os
+from dotenv import load_dotenv
+load_dotenv()
 from typing import Dict, List, Optional, Tuple
 
 from config.llm_config import LLMConfigSelector
@@ -81,12 +83,14 @@ def handle_design_process(config: Dict, selected_model: str) -> None:
                         agents_list[2],
                         agents_list[3],
                         agents_list[4],
+                        agents_list[5], # CAD_Image_Reviewer (Restored!)
                         agents_list[6]]
     meda = [agents_list[0],
                     agents_list[1],
                     agents_list[2],
                     agents_list[3],
-                    agents_list[4],]
+                    agents_list[4],
+                    agents_list[5]] # CAD_Image_Reviewer (Restored!)
 
     # Get input from user
     text_prompt, image_path = get_design_input(selected_model != "Text LLM")
@@ -127,7 +131,7 @@ def main():
 
         # Configuration setup
         if selected_model in ["Default GPT-40", "Default O1"]:
-            model_key = "gpt-4o-2024-08-06-2024-08-06-2024-08-06-2024-08-06-2024-08-06-2024-08-06-2024-08-06" if selected_model == "Default GPT-40" else "o1"
+            model_key = "gpt-4o" if selected_model == "Default GPT-40" else "o1"
             model_info = selector.get_default_model_info(model_key)
             config = {
                 "model": model_info["model"],

@@ -64,6 +64,11 @@ models:
     api_type: "google"
     api_key_env: "GEMINI_API_KEY"
     multimodal: True
+
+  gemini-3.5-flash:
+    api_type: "google"
+    api_key_env: "GEMINI_API_KEY"
+    multimodal: True
     
   claude-3-opus-20240229:
     api_type: "anthropic"
@@ -93,6 +98,11 @@ models:
 
 # Default configuration
 default_models:
+  gemini-3.5-flash:
+    model: "gemini-3.5-flash"
+    api_key: "GEMINI_API_KEY"
+    api_type: "google"
+
   gpt-4o:
     model: "gpt-4o-0806"
     api_key: "AZURE_API_KEY"
