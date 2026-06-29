@@ -25,6 +25,15 @@ We compare our multi-agent architecture MEDA with recent state-of-the-art CAD ge
 | **MEDA**          | GPT-4o        | **0.0555** (0.095)       | **0.2628** (0.401)     | 0.9413 (0.0275)      | **99%**             |
 | CADCodeVerify     | GPT-4         | 0.127 (0.135)            | 0.419 (0.356)          | **0.944** (0.028)    | 96.5%               |
 
+
+## Why MEDA is different
+
+MEDA uses an executable multi-agent loop instead of one-shot text-to-code generation. A lead orchestrator delegates parametric feature construction to a modeler agent and verification to a critic agent. The critic compiles CadQuery code in a sandbox, extracts B-Rep topology metrics, renders orthographic views, and feeds failures back into the loop. This makes the generated CAD easier to repair, measure, and reuse.
+
+## Research and product roadmap
+
+The next architecture direction is documented in [`docs/architecture_vision.md`](docs/architecture_vision.md). Key priorities include a structured CAD intermediate representation, constraint solving before code generation, retrieval over successful CAD traces, parallel candidate generation, learned visual reward models, and benchmark-driven geometry regression.
+
 ## Setup Instructions
 
 ### 1. **Clone the Repository**
