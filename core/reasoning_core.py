@@ -86,9 +86,13 @@ def run_cad_execution() -> str:
     if _active_core:
         code = _active_core.canvas.to_python_code()
         res = _active_core.sandbox.execute(code)
-        
-        # Calculate reward internally to provide quick feedback
-        reward, breakdown = RewardEngine.calculate_reward(res.success, res.metrics, _active_core.constraints)
+
+        # Calculate reward internally to provide quick feedback. The generated
+        # STL path enables distance-based scoring when a reference shape is set.
+        generated_stl = str(_active_core.sandbox.working_dir / "001.stl")
+        reward, breakdown = RewardEngine.calculate_reward(
+            res.success, res.metrics, _active_core.constraints, generated_stl=generated_stl
+        )
         
         if not res.success:
             err_msg = "Compilation failure"
@@ -151,6 +155,8 @@ def run_cad_execution() -> str:
             "success": res.success,
             "metrics": res.metrics,
             "reward": reward,
+            "geom_score": breakdown.get("geom_score"),
+            "distances": breakdown.get("distances"),
             "failed_constraints": breakdown["failed_constraints"]
         }
         return json.dumps(output)
