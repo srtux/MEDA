@@ -534,10 +534,27 @@ Do not include markdown formatting.
             except Exception as e:
                 raise e
 
-    def run_design_loop(self, prompt, constraints, image_path=None, max_iterations=100):
+    def run_design_loop(
+        self,
+        prompt: str,
+        constraints: Dict[str, Any],
+        image_path: Optional[str] = None,
+        max_iterations: int = 100,
+        session_id: Optional[str] = None,
+        keep_canvas: bool = False,
+        fast_mode: bool = False
+    ) -> Dict[str, Any]:
         """Serialized public entry point (bug H4) that delegates to the impl."""
         with _run_lock:
-            return self._run_design_loop_impl(prompt, constraints, image_path, max_iterations)
+            return self._run_design_loop_impl(
+                prompt=prompt,
+                constraints=constraints,
+                image_path=image_path,
+                max_iterations=max_iterations,
+                session_id=session_id,
+                keep_canvas=keep_canvas,
+                fast_mode=fast_mode
+            )
 
     def _run_design_loop_impl(
         self,
