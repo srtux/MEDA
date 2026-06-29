@@ -288,7 +288,7 @@ You have access to the following tool:
         self.log_callback = None
         self.event_callback = None
         self.successful_compiles_count = 0
-        
+        self.memory_store = CADMemoryStore()
         # Live per-iteration render callback (set by the UI): (iter_n, png_path).
         self.render_callback = None
 
@@ -310,7 +310,6 @@ You have access to the following tool:
         self._prev_failed_sigs: set = set()
         self._prev_detail: Dict[str, str] = {}
         self._prev_reward: float = 0.0
-        self.memory_store = CADMemoryStore()
 
     def _reset_run_state(self):
         self.render_iter = 0
@@ -557,6 +556,16 @@ Do not include markdown formatting.
         self.log(f"[LOG] Target Constraints: {constraints}")
         if image_path:
             self.log(f"[LOG] Image Path: {image_path}")
+        
+        retrieved_memories = self.memory_store.retrieve(prompt)
+        memory_guidance = ""
+        if retrieved_memories:
+            memory_lines = [
+                f"- {memory.tip} (prior outcome: {memory.outcome})"
+                for memory in retrieved_memories
+            ]
+            memory_guidance = "\nRelevant lessons from prior CAD trajectories:\n" + "\n".join(memory_lines)
+            self.log(f"[LOG] Retrieved {len(retrieved_memories)} trajectory memories for this prompt.")
         
         # Reset canvas state only if not keeping it
         if not keep_canvas:
