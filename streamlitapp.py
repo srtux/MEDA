@@ -181,7 +181,7 @@ def initialize_session_state():
 
 def render_parameter_controls(python_file_path):
     "Render the parameter controls for the CAD model"
-    st.write("### Parametric controls")
+    st.markdown('<div class="section-title">Parametric controls</div><div class="section-subtitle">Tune generated dimensions and regenerate the CAD asset.</div>', unsafe_allow_html=True)
 
     if not python_file_path or not Path(python_file_path).exists():
         return
@@ -262,7 +262,7 @@ def render_events_status(events: list):
 
 def render_chat_workspace():
     "Render the main chat interface and prompt input area"
-    st.write("### 💬 CAD Chat")
+    st.markdown('<div class="section-title">💬 CAD Copilot</div><div class="section-subtitle">Describe a model, attach a reference sketch, or refine the current geometry.</div>', unsafe_allow_html=True)
     
     # Scrollable chat messages container
     chat_container = st.container(height=800, border=True)
@@ -402,7 +402,7 @@ def get_iteration_stl_files(working_dir):
 
 def render_right_column():
     "Render the 3D model visualizer, download controls, parameters, and 3D viewer style selectors"
-    st.write("### 📐 3D Preview")
+    st.markdown('<div class="section-title">📐 Live 3D Preview</div><div class="section-subtitle">Inspect iterations, adjust viewer materials, and export production-ready files.</div>', unsafe_allow_html=True)
     
     # Check if a model is available to preview (either default or generated)
     stl_file = st.session_state.current_stl_path
@@ -519,40 +519,159 @@ def render_download_buttons():
 
 
 def inject_design_system():
-    """Install a lightweight visual design system for the Streamlit interface."""
+    """Install a polished product-grade visual design system for the Streamlit interface."""
     st.markdown(
         """
         <style>
-        .stApp {
-            background: radial-gradient(circle at top left, #172554 0, #0f172a 32%, #020617 100%);
-            color: #e5e7eb;
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800;900&family=JetBrains+Mono:wght@400;600&display=swap');
+
+        :root {
+            --bg: #050816;
+            --panel: rgba(12, 18, 32, 0.78);
+            --panel-strong: rgba(15, 23, 42, 0.94);
+            --panel-soft: rgba(30, 41, 59, 0.58);
+            --stroke: rgba(148, 163, 184, 0.18);
+            --stroke-strong: rgba(125, 211, 252, 0.38);
+            --text: #f8fafc;
+            --muted: #94a3b8;
+            --accent: #38bdf8;
+            --accent-2: #8b5cf6;
+            --success: #34d399;
+            --shadow: 0 28px 90px rgba(0, 0, 0, 0.42);
         }
+
+        html, body, .stApp, [data-testid="stAppViewContainer"] {
+            background:
+                radial-gradient(circle at 12% 8%, rgba(56, 189, 248, 0.20), transparent 28rem),
+                radial-gradient(circle at 84% 0%, rgba(139, 92, 246, 0.20), transparent 30rem),
+                linear-gradient(135deg, #030712 0%, var(--bg) 46%, #0b1020 100%) !important;
+            color: var(--text) !important;
+            font-family: 'Inter', sans-serif !important;
+        }
+
+        header, footer, [data-testid="stToolbar"] { visibility: hidden; height: 0; }
+        .block-container { padding: 1.25rem 2rem 2rem !important; max-width: 1560px !important; }
+        * { font-family: 'Inter', sans-serif !important; }
+        code, pre { font-family: 'JetBrains Mono', monospace !important; }
+
         [data-testid="stSidebar"] {
-            background: linear-gradient(180deg, rgba(15,23,42,.98), rgba(30,41,59,.98));
-            border-right: 1px solid rgba(148,163,184,.22);
+            background: linear-gradient(180deg, rgba(2, 6, 23, 0.98), rgba(15, 23, 42, 0.96)) !important;
+            border-right: 1px solid var(--stroke);
+            box-shadow: 20px 0 80px rgba(0,0,0,.24);
+        }
+        [data-testid="stSidebar"] h1 { letter-spacing: -0.04em; font-weight: 850; }
+
+        .app-shell {
+            border: 1px solid rgba(148, 163, 184, 0.16);
+            border-radius: 30px;
+            padding: 1.2rem;
+            background: linear-gradient(180deg, rgba(15, 23, 42, 0.58), rgba(2, 6, 23, 0.28));
+            box-shadow: var(--shadow);
+            backdrop-filter: blur(20px);
         }
         .hero-card {
-            padding: 1.4rem 1.6rem;
-            border: 1px solid rgba(148,163,184,.25);
-            border-radius: 24px;
-            background: linear-gradient(135deg, rgba(59,130,246,.18), rgba(14,165,233,.08));
-            box-shadow: 0 22px 80px rgba(2,6,23,.35);
+            position: relative;
+            overflow: hidden;
+            padding: 1.55rem 1.7rem;
+            border: 1px solid rgba(125, 211, 252, 0.24);
+            border-radius: 28px;
+            background:
+                linear-gradient(135deg, rgba(56, 189, 248, 0.18), rgba(139, 92, 246, 0.13)),
+                rgba(15, 23, 42, 0.62);
+            box-shadow: 0 22px 80px rgba(2, 6, 23, 0.36);
             margin-bottom: 1rem;
         }
-        .hero-card h1 { margin: 0; font-size: 3rem; letter-spacing: -0.08em; }
-        .hero-card p { color: #bfdbfe; font-size: 1.05rem; margin-bottom: 0; }
-        div.stButton > button, div.stDownloadButton > button {
+        .hero-card:after {
+            content: "";
+            position: absolute;
+            inset: -40% -20% auto auto;
+            width: 28rem;
+            height: 28rem;
+            background: radial-gradient(circle, rgba(56,189,248,.26), transparent 62%);
+            pointer-events: none;
+        }
+        .eyebrow { color: #bae6fd; font-size: .76rem; font-weight: 800; letter-spacing: .16em; text-transform: uppercase; }
+        .hero-title { margin: .25rem 0 .35rem; font-size: clamp(2.1rem, 5vw, 4.3rem); line-height: .9; letter-spacing: -.09em; font-weight: 900; }
+        .hero-copy { color: #cbd5e1; max-width: 820px; font-size: 1.02rem; margin: 0; }
+        .hero-metrics { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1.15rem; }
+        .metric-pill {
+            border: 1px solid rgba(148,163,184,.18);
             border-radius: 999px;
-            border: 1px solid rgba(125,211,252,.5);
-            background: linear-gradient(135deg, #38bdf8, #6366f1);
-            color: white;
+            padding: .5rem .78rem;
+            background: rgba(2,6,23,.32);
+            color: #dbeafe;
+            font-size: .82rem;
             font-weight: 700;
         }
-        [data-testid="stExpander"] {
-            border: 1px solid rgba(148,163,184,.25);
-            border-radius: 18px;
-            background: rgba(15,23,42,.72);
+        .status-badge {
+            display:inline-flex; align-items:center; gap:.45rem; padding:.42rem .7rem;
+            border-radius:999px; background:rgba(52,211,153,.11); color:#a7f3d0;
+            border:1px solid rgba(52,211,153,.28); font-weight:800; font-size:.78rem;
         }
+        .status-dot { width:.48rem; height:.48rem; border-radius:999px; background:var(--success); box-shadow:0 0 0 .28rem rgba(52,211,153,.12); }
+
+        .section-title { margin: .25rem 0 .85rem; font-size: 1.02rem; font-weight: 850; letter-spacing: -.03em; color: #f8fafc; }
+        .section-subtitle { color: var(--muted); margin-top: -.55rem; margin-bottom: 1rem; font-size: .88rem; }
+
+        div[data-testid="stVerticalBlockBorderWrapper"] {
+            border-color: var(--stroke) !important;
+            background: var(--panel) !important;
+            border-radius: 24px !important;
+            box-shadow: 0 18px 60px rgba(0,0,0,.22) !important;
+            backdrop-filter: blur(18px);
+        }
+        div[data-testid="column"] { background: transparent !important; border: 0 !important; padding: .35rem !important; box-shadow: none !important; }
+
+        div[data-testid="stChatMessage"] {
+            border: 1px solid rgba(148,163,184,.14);
+            border-radius: 22px;
+            background: rgba(15,23,42,.52);
+            padding: .35rem .5rem;
+            margin-bottom: .75rem;
+        }
+
+        label[data-testid="stWidgetLabel"] p, .stSlider label, p, li { color: #cbd5e1 !important; }
+        h1, h2, h3 { color: #f8fafc !important; }
+        div[data-baseweb="input"], div[data-baseweb="select"] > div, textarea, input {
+            background: rgba(2, 6, 23, 0.44) !important;
+            border: 1px solid rgba(148, 163, 184, 0.20) !important;
+            border-radius: 14px !important;
+            color: #f8fafc !important;
+            box-shadow: none !important;
+        }
+        div[data-baseweb="input"]:focus-within, div[data-baseweb="select"]:focus-within > div {
+            border-color: var(--stroke-strong) !important;
+            box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.10) !important;
+        }
+
+        div.stButton > button, div.stDownloadButton > button {
+            border-radius: 14px !important;
+            border: 1px solid rgba(125, 211, 252, 0.26) !important;
+            background: linear-gradient(135deg, rgba(56,189,248,.16), rgba(139,92,246,.13)) !important;
+            color: #e0f2fe !important;
+            font-weight: 800 !important;
+            transition: transform .15s ease, border-color .15s ease, background .15s ease !important;
+        }
+        div.stButton > button:hover, div.stDownloadButton > button:hover {
+            transform: translateY(-1px);
+            border-color: rgba(125, 211, 252, 0.55) !important;
+            background: linear-gradient(135deg, rgba(56,189,248,.28), rgba(139,92,246,.22)) !important;
+        }
+        .st-key-send_btn button {
+            border-radius: 999px !important;
+            background: linear-gradient(135deg, #38bdf8, #818cf8) !important;
+            color: #020617 !important;
+            box-shadow: 0 12px 30px rgba(56,189,248,.28) !important;
+        }
+        .st-key-reset_session_btn button, .st-key-drawing_uploader button { border-radius: 999px !important; }
+
+        [data-testid="stExpander"] {
+            border: 1px solid rgba(148,163,184,.16) !important;
+            border-radius: 18px !important;
+            background: rgba(2,6,23,.34) !important;
+        }
+        [data-testid="stStatusWidget"] { border-radius: 18px !important; }
+        .stAlert { border-radius: 18px !important; }
         </style>
         """,
         unsafe_allow_html=True,
@@ -561,16 +680,23 @@ def inject_design_system():
 
 def render_hero():
     """Render the product-facing hero panel."""
+    model_label = st.session_state.get("selected_model", "Default Gemini")
     st.markdown(
-        """
+        f"""
         <section class="hero-card">
-          <h1>MEDA</h1>
-          <p>Multi-agent, executable CAD synthesis with parametric timelines, sandboxed B-Rep verification, and visual self-critique.</p>
+          <div class="eyebrow">Mechanical Design Agent</div>
+          <h1 class="hero-title">MEDA</h1>
+          <p class="hero-copy">A sleek multi-agent CAD studio for turning sketches and prompts into verified parametric geometry with live iteration history, sandbox execution, and export-ready manufacturing files.</p>
+          <div class="hero-metrics">
+            <span class="status-badge"><span class="status-dot"></span>{model_label} active</span>
+            <span class="metric-pill">Parametric CAD</span>
+            <span class="metric-pill">Visual critique loop</span>
+            <span class="metric-pill">STEP + STL export</span>
+          </div>
         </section>
         """,
         unsafe_allow_html=True,
     )
-
 
 def main():
     "Main function to run the Streamlit app"
@@ -583,349 +709,8 @@ def main():
     initialize_session_state()
     render_llm_config_sidebar()
 
-    # Apply custom modern styling
-    custom_css = """
-    <style>
-    @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;700&display=swap');
-
-    /* Background and main container */
-    html, body, [data-testid="stAppViewContainer"], .stApp, [data-testid="stHeader"], [data-testid="stToolbar"] {
-        background-color: #080c14 !important;
-        background: #080c14 !important;
-    }
-
-    header, footer {
-        visibility: hidden;
-    }
-
-    /* Custom typography */
-    h1, h2, h3, h4, h5, h6, p, li {
-        font-family: 'Inter', sans-serif !important;
-    }
-
-    /* Style the main title */
-    .title-banner {
-        display: flex;
-        align-items: center;
-        justify-content: space-between;
-        padding: 1rem 2rem;
-        margin-bottom: 1.5rem;
-        background: #0f172a;
-        border-bottom: 1px solid #1e293b;
-        border-radius: 12px;
-    }
-    .title-banner h1 {
-        font-size: 1.8rem !important;
-        font-weight: 800 !important;
-        color: #ffffff !important;
-        letter-spacing: -0.04em;
-        margin: 0 !important;
-        display: flex;
-        align-items: center;
-        gap: 12px;
-    }
-    .title-banner p {
-        font-size: 0.95rem !important;
-        color: #94a3b8 !important;
-        margin: 0 !important;
-    }
-    .status-badge {
-        display: inline-flex;
-        align-items: center;
-        gap: 6px;
-        background-color: rgba(16, 185, 129, 0.1);
-        color: #10b981;
-        font-size: 0.75rem;
-        font-weight: 600;
-        padding: 4px 10px;
-        border-radius: 9999px;
-        border: 1px solid rgba(16, 185, 129, 0.2);
-    }
-    .status-dot {
-        width: 6px;
-        height: 6px;
-        background-color: #10b981;
-        border-radius: 50%;
-    }
-
-    /* Cards for columns */
-    div[data-testid="column"] {
-        background-color: #0f172a !important;
-        border: 1px solid #1e293b !important;
-        border-radius: 12px !important;
-        padding: 24px !important;
-        box-shadow: 0 10px 15px -3px rgba(0, 0, 0, 0.3) !important;
-        transition: border-color 0.2s ease, box-shadow 0.2s ease !important;
-    }
-    div[data-testid="column"]:hover {
-        border-color: #334155 !important;
-    }
-
-    /* High-contrast widget labels */
-    label[data-testid="stWidgetLabel"] p, .stSlider label {
-        color: #cbd5e1 !important;
-        font-weight: 500 !important;
-        font-size: 0.9rem !important;
-    }
-
-    /* Styled inputs */
-    div[data-baseweb="input"], input, textarea, select {
-        background-color: #1e293b !important;
-        border: 1px solid #334155 !important;
-        border-radius: 8px !important;
-        color: #f8fafc !important;
-        padding: 6px !important;
-        transition: border-color 0.15s ease !important;
-    }
-    div[data-baseweb="input"]:focus-within {
-        border-color: #0ea5e9 !important;
-        box-shadow: 0 0 0 1px #0ea5e9 !important;
-    }
-
-    /* Primary buttons (Generate CAD Model) */
-    button[kind="primary"] {
-        background-color: #0284c7 !important;
-        background: #0284c7 !important;
-        color: #ffffff !important;
-        border: none !important;
-        border-radius: 8px !important;
-        padding: 10px 20px !important;
-        font-weight: 600 !important;
-        font-size: 0.95rem !important;
-        transition: background-color 0.15s ease, transform 0.1s ease !important;
-        width: 100%;
-        box-shadow: 0 4px 6px -1px rgba(2, 132, 199, 0.2), 0 2px 4px -2px rgba(2, 132, 199, 0.2) !important;
-    }
-    button[kind="primary"]:hover {
-        background-color: #0369a1 !important;
-        background: #0369a1 !important;
-        transform: translateY(-1px);
-    }
-    button[kind="primary"]:active {
-        transform: translateY(0);
-    }
-
-    /* Secondary / Outline buttons (Downloads, Example Prompts) */
-    button[kind="secondary"], div[data-testid="stDownloadButton"] button {
-        background-color: rgba(255, 255, 255, 0.02) !important;
-        background: rgba(255, 255, 255, 0.02) !important;
-        color: #cbd5e1 !important;
-        border: 1px solid #334155 !important;
-        border-radius: 8px !important;
-        padding: 10px 20px !important;
-        font-weight: 500 !important;
-        font-size: 0.9rem !important;
-        transition: all 0.15s ease !important;
-        width: 100%;
-        text-align: center;
-        box-shadow: none !important;
-    }
-    button[kind="secondary"]:hover, div[data-testid="stDownloadButton"] button:hover {
-        background-color: rgba(2, 132, 199, 0.08) !important;
-        background: rgba(2, 132, 199, 0.08) !important;
-        border-color: #0284c7 !important;
-        color: #38bdf8 !important;
-    }
-
-    /* Styled expander */
-    .streamlit-expanderHeader {
-        background-color: #0f172a !important;
-        border: 1px solid #1e293b !important;
-        border-radius: 8px !important;
-        padding: 12px 18px !important;
-    }
-    .streamlit-expanderContent {
-        background-color: #080c14 !important;
-        border-left: 1px solid #1e293b !important;
-        border-right: 1px solid #1e293b !important;
-        border-bottom: 1px solid #1e293b !important;
-        border-bottom-left-radius: 8px !important;
-        border-bottom-right-radius: 8px !important;
-    }
-
-    /* Log tracer code block styling */
-    code, pre {
-        font-family: 'JetBrains Mono', monospace !important;
-        background-color: transparent !important;
-        color: #e2e8f0 !important;
-        border: none !important;
-    }
-    
-    /* Center columns structure padding */
-    .block-container {
-        padding-top: 1rem !important;
-        padding-bottom: 2rem !important;
-    }
-
-    /* 1. Scrollable chat messages container (first wrapper) */
-    div[data-testid="column"]:first-child div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"]:first-of-type > div {
-        height: calc(100vh - 150px) !important;
-        max-height: calc(100vh - 150px) !important;
-    }
-    div[data-testid="column"]:first-child div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"]:first-of-type div[data-testid="stVerticalBlock"] {
-        height: calc(100vh - 150px) !important;
-        max-height: calc(100vh - 150px) !important;
-    }
-
-    /* 2. Unified Google Gemini-style prompt capsule container (second wrapper) */
-    div[data-testid="column"]:first-child div[data-testid="stVerticalBlock"] > div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-testid="stTextInput"]) {
-        background-color: rgba(15, 23, 42, 0.6) !important; /* slate-900 transparent */
-        border: 1px solid #1e293b !important;
-        border-radius: 36px !important; /* PERFECT CAPSULE PILL SHAPE! */
-        padding: 8px 20px !important;
-        margin-top: 10px !important;
-        box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2) !important;
-    }
-    
-    /* Make sure columns inside the capsule align vertically centered */
-    div[data-testid="column"]:first-child div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-testid="stTextInput"]) div[data-testid="stHorizontalBlock"] {
-        display: flex !important;
-        align-items: center !important;
-        justify-content: space-between !important;
-        gap: 8px !important;
-    }
-    
-    /* Make text input inside prompt box borderless and transparent */
-    div[data-testid="column"]:first-child div[data-testid="stVerticalBlockBorderWrapper"]:has(div[data-testid="stTextInput"]) div[data-testid="stTextInput"] input {
-        border: none !important;
-        background-color: transparent !important;
-        padding-left: 8px !important;
-        color: #e2e8f0 !important;
-        box-shadow: none !important;
-        font-size: 16px !important;
-        height: 38px !important;
-    }
-    
-    /* Plus (+) Upload button styling inside capsule */
-    .st-key-drawing_uploader {
-        padding: 0 !important;
-        margin: 0 !important;
-        width: 36px !important;
-        min-width: 36px !important;
-        max-width: 36px !important;
-    }
-    .st-key-drawing_uploader [data-testid="stFileUploader"] {
-        width: 100% !important;
-    }
-    .st-key-drawing_uploader [data-testid="stWidgetLabel"] {
-        display: none !important;
-    }
-    .st-key-drawing_uploader section[data-testid="stFileUploaderDropzone"] {
-        border: none !important;
-        background-color: transparent !important;
-        min-height: 36px !important;
-        height: 36px !important;
-        padding: 0 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        padding: 0 !important;
-    }
-    .st-key-drawing_uploader [data-testid="stFileUploaderDropzoneInstructions"] {
-        display: none !important;
-    }
-    .st-key-drawing_uploader button {
-        width: 36px !important;
-        height: 36px !important;
-        margin: 0 !important;
-        background-color: transparent !important;
-        border: none !important;
-        color: transparent !important;
-        font-size: 0px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        padding: 0 !important;
-    }
-    .st-key-drawing_uploader button::before {
-        content: "📎" !important; /* paperclip emoji */
-        font-size: 20px !important;
-        display: inline-block !important;
-        color: #94a3b8 !important;
-        line-height: 36px !important;
-    }
-    .st-key-drawing_uploader button:hover::before {
-        color: #38bdf8 !important;
-    }
-    
-    /* Reset button styling inside capsule */
-    .st-key-reset_session_btn {
-        display: flex !important;
-        justify-content: center !important;
-        align-items: center !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        width: 36px !important;
-        min-width: 36px !important;
-        max-width: 36px !important;
-    }
-    .st-key-reset_session_btn button {
-        height: 36px !important;
-        border: none !important;
-        background-color: transparent !important;
-        color: #94a3b8 !important;
-        font-size: 18px !important;
-        padding: 0 !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        width: 36px !important;
-    }
-    .st-key-reset_session_btn button:hover {
-        background-color: rgba(2, 132, 199, 0.08) !important;
-        color: #38bdf8 !important;
-        border-radius: 50% !important; /* hover circle for reset icon! */
-    }
-
-    /* SOLID BLUE CIRCLE Send button styling on the right inside capsule */
-    .st-key-send_btn {
-        display: flex !important;
-        justify-content: center !important;
-        align-items: center !important;
-        padding: 0 !important;
-        margin: 0 !important;
-        width: 36px !important;
-        min-width: 36px !important;
-        max-width: 36px !important;
-    }
-    .st-key-send_btn button {
-        background-color: #38bdf8 !important; /* solid sky blue background! */
-        color: #0f172a !important; /* dark slate arrow icon! */
-        border: none !important;
-        border-radius: 50% !important; /* PERFECT CIRCLE! */
-        width: 36px !important;
-        height: 36px !important;
-        min-width: 36px !important;
-        max-width: 36px !important;
-        display: flex !important;
-        align-items: center !important;
-        justify-content: center !important;
-        box-shadow: 0 2px 8px rgba(56, 189, 248, 0.3) !important;
-        padding: 0 !important;
-        margin: 0 !important;
-    }
-    .st-key-send_btn button:hover {
-        background-color: #0ea5e9 !important; /* hover slightly darker blue */
-        box-shadow: 0 4px 12px rgba(56, 189, 248, 0.5) !important;
-    }
-    /* Set send icon size inside the button */
-    .st-key-send_btn button p {
-        font-size: 18px !important;
-        margin: 0 !important;
-        line-height: 36px !important;
-        color: #0f172a !important;
-    }
-    </style>
-    """
-    st.markdown(custom_css, unsafe_allow_html=True)
-
-    # Header section
-    st.markdown("""
-        <div class="title-banner">
-            <h1>MEDA <span class="status-badge"><span class="status-dot"></span>Gemini 3.5 Active</span></h1>
-            <p>Autonomous Mechanical Design & Parametric CAD Agents</p>
-        </div>
-    """, unsafe_allow_html=True)
+    inject_design_system()
+    render_hero()
 
     if not st.session_state.config_created or not st.session_state.llm_config:
         st.error("⚠️ GEMINI_API_KEY environment variable is not configured. Please set the variable and reload.")
