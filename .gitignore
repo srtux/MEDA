@@ -43,3 +43,6 @@ Thumbs.db
 # Learning store: commit the seeded DB, ignore runtime WAL/SHM sidecar files
 memory/*.db-wal
 memory/*.db-shm
+
+# Runtime data/memory files
+data/
