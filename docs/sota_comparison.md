@@ -2,6 +2,16 @@
 
 *Last updated: 2026-06-29*
 
+> **See also:** the full competitive landscape — open source, startups/proprietary,
+> and academic/industry research through June 2026, with verified citations — now
+> lives in [`text_to_cad_landscape_2026.md`](./text_to_cad_landscape_2026.md).
+> That document also corrects two citation errors below: **Text2CAD's real arXiv
+> ID is [2409.17106](https://arxiv.org/abs/2409.17106)** (NeurIPS 2024 Spotlight) —
+> the `2505.19490` cited below is a *different* paper (Liao et al., "Automated CAD
+> Modeling Sequence Generation," ACL 2025) — and MEDA's baseline **CADCodeVerify
+> is [2410.05340](https://arxiv.org/abs/2410.05340)** (ICLR 2025), which introduced
+> the CADPrompt benchmark.
+
 This document situates MEDA's technique within the current (2025–2026) research
 landscape for converting natural language into CAD models, compares it against
 academic systems and commercial products (e.g. **adam.new**, **CADAM**), and
