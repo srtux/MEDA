@@ -1,0 +1,17 @@
+[project]
+name = "meda"
+version = "0.1.0"
+description = "Mechanical Engineering Design Agents using Google ADK"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "cadquery",
+    "cadquery-ocp==7.7.2",
+    "ocp-tessellate==3.0.4",
+    "open3d",
+    "streamlit",
+    "streamlit-stl",
+    "python-dotenv",
+    "google-adk>=2.3.0",
+    "google-genai"
+]

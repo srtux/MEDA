@@ -1,5 +1,6 @@
 import os
 import json
+import time
 import sys
 from pathlib import Path
 from typing import Dict, Any, List, Optional
@@ -7,6 +8,13 @@ from google import genai
 from google.genai import types
 from google.genai.errors import APIError
 from dotenv import load_dotenv
+
+# Google ADK Imports
+from google.adk.agents import LlmAgent
+from google.adk.runners import Runner
+from google.adk.artifacts import InMemoryArtifactService
+from google.adk.sessions import InMemorySessionService
+from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
 
 # Load local libraries
 from core.canvas import Canvas
@@ -98,53 +106,49 @@ def run_cad_execution() -> str:
         if res.success and reward == 1.0:
             png_path = _active_core.sandbox.working_dir / "001.png"
             try:
-                import subprocess
-                import sys
-                script_path = Path("utils/capture_screenshot.py")
-                # Ensure the STL file exists
-                stl_file = _active_core.sandbox.working_dir / "001.stl"
-                if stl_file.exists():
-                    subprocess.run(
-                        [sys.executable, str(script_path), str(stl_file), str(png_path)],
-                        capture_output=True,
-                        text=True
+                from utils.capture_screenshot import capture_orthographic_collage
+                capture_orthographic_collage(str(_active_core.sandbox.working_dir / "001.stl"), str(png_path))
+                
+                # Invoke multimodal visual critic to evaluate match alignment
+                visual_critique_system = """
+                You are an expert mechanical engineering checker. Compare the rendered 3D CAD model views (collage of Isometric, Top, Front, Right orthographic projections) against the original text design prompt.
+                Evaluate the model's structural features:
+                1. Are all secondary parts (stems, leaves, handles, holes) correctly positioned relative to the main body?
+                2. Are there any detached, overlapping, or intersecting surfaces causing distorted meshes?
+                3. Does the design look physically accurate and completely aligned with the prompt?
+
+                Return a JSON object containing two fields:
+                - "match": boolean (true if visual alignment is correct and complete, false otherwise)
+                - "critique": string (detailed critique describing any visual/positional errors, or explaining why it matches)
+                Do not include markdown code block syntax.
+                """
+                from PIL import Image
+                img = Image.open(png_path)
+                
+                critic_resp = _active_core._safe_call(
+                    _active_core.client.models.generate_content,
+                    model=_active_core.model_name,
+                    contents=[img, f"Original prompt: {_active_core.prompt}"],
+                    config=types.GenerateContentConfig(
+                        system_instruction=visual_critique_system,
+                        temperature=0.0,
+                        response_mime_type="application/json"
                     )
-                    
-                    if png_path.exists():
-                        from PIL import Image
-                        img = Image.open(png_path)
-                        
-                        visual_instruction = (
-                            f"You are a CAD visual inspection expert. Compare the 4-view orthographic drawing collage of the 3D model with the design prompt: \"{_active_core.prompt}\".\n"
-                            "Verify if the parts are correctly aligned and connected (e.g. wheels touch the ground/frame, head is attached to body).\n"
-                            "Respond in JSON format with two keys:\n"
-                            "- \"match\": true if it matches correctly without floating/distorted parts, false otherwise.\n"
-                            "- \"critique\": a brief explanation of any misalignments, floating objects, or missing components.\n"
-                        )
-                        
-                        resp = _active_core._safe_call(
-                            _active_core.client.models.generate_content,
-                            model="gemini-3.5-flash",  # Fast vision validation
-                            contents=[img, visual_instruction],
-                            config=types.GenerateContentConfig(
-                                response_mime_type="application/json",
-                                temperature=0.0
-                            )
-                        )
-                        
-                        visual_res = json.loads(resp.text.strip())
-                        _active_core.log(f"[LOG] Visual Critique - Match: {visual_res.get('match')}, Critique: {visual_res.get('critique')}")
-                        
-                        if not visual_res.get("match", True):
-                            reward = 0.0  # Gate success until visuals are corrected
-                            breakdown["failed_constraints"].append(f"Visual validation failure: {visual_res.get('critique')}")
+                )
+                critic_data = json.loads(critic_resp.text.strip())
+                _active_core.log(f"[LOG] Visual Critique - Match: {critic_data.get('match')}, Critique: {critic_data.get('critique')}")
+                
+                if not critic_data.get("match", False):
+                    # Visual fail sets reward back to 0.0 to force correction turn
+                    reward = 0.0
+                    breakdown["failed_constraints"].append(f"Visual validation failure: {critic_data.get('critique')}")
             except Exception as e:
-                _active_core.log(f"[WARNING] Visual validation step skipped: {e}")
+                _active_core.log(f"[WARNING] Visual critique step encountered an error: {e}")
+                reward = 0.0
+                breakdown["failed_constraints"].append(f"Visual critique error: {str(e)}")
 
         output = {
             "success": res.success,
-            "stdout": res.stdout,
-            "stderr": res.stderr,
             "metrics": res.metrics,
             "reward": reward,
             "failed_constraints": breakdown["failed_constraints"]
@@ -173,7 +177,6 @@ class ReasoningCADCore:
                 pass
 
     def _safe_call(self, func, *args, **kwargs):
-        import time
         import random
         max_retries = 5
         backoff = 2.0
@@ -197,7 +200,7 @@ class ReasoningCADCore:
         prompt: str,
         constraints: Dict[str, Any],
         image_path: Optional[str] = None,
-        max_iterations: int = 15
+        max_iterations: int = 100
     ) -> Dict[str, Any]:
         """Runs the autonomous Chain-of-Thought tool execution loop until the design goal is achieved."""
         global _active_core
@@ -211,6 +214,7 @@ class ReasoningCADCore:
         # Reset canvas state
         self.canvas = Canvas()
         self.prompt = prompt
+        
         # Extract/infer constraints from prompt using a simple model call
         inferred_constraints = {}
         try:
@@ -234,7 +238,6 @@ class ReasoningCADCore:
                 )
             )
             text = resp.text.strip()
-            # Clean markdown code blocks if any
             if text.startswith("```"):
                 text = text.split("\n", 1)[1].rsplit("\n", 1)[0].strip()
             if text.startswith("json"):
@@ -247,184 +250,155 @@ class ReasoningCADCore:
         # Merge constraints
         self.constraints = {**inferred_constraints, **constraints}
         
-        # Standard system instructions
-        system_instruction = """
-You are an expert autonomous CAD engineering agent. Your objective is to design a 3D CAD model using CadQuery that perfectly matches the user design prompt and satisfies all target constraints.
+        # ----------------------------------------------------
+        # SYSTEM INSTRUCTIONS FOR MULTI-AGENT ADK ORCHESTRATION
+        # ----------------------------------------------------
+        
+        orchestrator_instruction = """
+You are the Lead CAD Architect and Coordinator (MEDAOrchestrator). Your objective is to design a 3D CAD model using CadQuery that perfectly matches the user design prompt and satisfies all target constraints.
 
-You must build the design parametrically by calling the available tools in sequence:
-1. Planning Phase (First Turn): Before calling any modeling tools, write a brief, step-by-step parametric modeling plan describing your design approach, coordinate layout, and any helper structures/functions (like line/strut generators or lofts) you plan to use.
-2. Parameter Definition: Define all dimensions using the `add_parameter` tool.
-3. Feature Timeline Construction: Add the feature code steps (starting with the base solid `model = ...`, then chaining subsequent modifications to `model = ...`) using the `add_feature` tool.
-4. Compilation & Verification: Call the `run_cad_execution` tool to compile and verify the model's metrics.
-5. Surgical Correction: If the execution returns a reward of 0.0, analyze the compile/constraint logs, use `modify_feature` or `set_parameter` to fix, and execute again. Repeat until the reward is 1.0.
+You do not write code or compile geometry directly. Instead, you coordinate the workflow by delegating tasks to your specialized sub-agents:
+1. **CADModelerAgent**: Delegate to this agent to define parametric variables, write feature code blocks, and surgically modify or remove feature timeline steps.
+2. **VisualCriticAgent**: Delegate to this agent to execute the script in the sandbox, verify geometrical topology metrics (volume, faces, COM), evaluate visual alignment critiques on the rendered views, and verify the final reward.
 
-Do NOT output a final text response declaring success until you have successfully executed `run_cad_execution` and verified that the reward is 1.0.
+**Your Delegation Workflow**:
+- Step 1: Hand off to CADModelerAgent to construct the modeling plan, define parameters, and add the initial solid features.
+- Step 2: Hand off to VisualCriticAgent to compile and visually verify the model's metrics.
+- Step 3: Inspect the feedback from VisualCriticAgent. If the reward is 1.0, you are successful! End the loop.
+- Step 4: If the reward is 0.0, analyze the failure reasons (compiler errors or visual critique feedback) and delegate back to CADModelerAgent with clear corrective instructions. Repeat this loop until VisualCriticAgent returns success (reward = 1.0).
 
-CRITICAL GEOMETRIC CONSTRAINTS:
-*   **Revolve Axis Rules**: When calling `revolve(angle, axisStart, axisEnd)` on a 2D sketch workplane (e.g. `"XZ"` or `"YZ"`), the axis coordinate arguments are evaluated in the *local coordinate space* of that sketch plane. The axis of revolution MUST lie coplanar within the sketch plane (along local X `(1, 0, 0)` or local Y `(0, 1, 0)`). Never revolve around the local Z-axis `(0, 0, 1)` (perpendicular normal vector), as this is geometrically degenerate and crashes the OpenCascade kernel.
-*   **Boolean Union Cleanliness**: When unioning secondary features (e.g. leaves, grips, pedals) to parent structures (e.g. stems, handlebars, cranks), attach them cleanly to their immediate parent and do not let them deeply or shallowly intersect other primary bodies (e.g. the main apple body). Deep intersections at shallow angles cause mesh singularities and distorted triangular face artifacts.
+Do NOT declare success in a text message to the user until VisualCriticAgent has run and confirmed that the reward is 1.0.
 """
 
-        # Map global tool function handles with explicit schemas
-        tools_list = [
-            types.Tool(
-                function_declarations=[
-                    types.FunctionDeclaration(
-                        name="add_parameter",
-                        description="Add a named parametric variable (dimension, offset, diameter) to the design.",
-                        parameters=types.Schema(
-                            type="OBJECT",
-                            properties={
-                                "name": types.Schema(type="STRING", description="Name of the parameter"),
-                                "value": types.Schema(type="NUMBER", description="Numeric value of the parameter"),
-                                "description": types.Schema(type="STRING", description="Description of the parameter")
-                            },
-                            required=["name", "value", "description"]
-                        )
-                    ),
-                    types.FunctionDeclaration(
-                        name="set_parameter",
-                        description="Update the value of an existing named parameter.",
-                        parameters=types.Schema(
-                            type="OBJECT",
-                            properties={
-                                "name": types.Schema(type="STRING", description="Name of the parameter"),
-                                "value": types.Schema(type="NUMBER", description="New numeric value")
-                            },
-                            required=["name", "value"]
-                        )
-                    ),
-                    types.FunctionDeclaration(
-                        name="add_feature",
-                        description="Append a new CadQuery CAD feature operation code block to the end of the timeline.",
-                        parameters=types.Schema(
-                            type="OBJECT",
-                            properties={
-                                "code": types.Schema(type="STRING", description="Code block updating 'model' variable"),
-                                "description": types.Schema(type="STRING", description="Description of this feature step")
-                            },
-                            required=["code", "description"]
-                        )
-                    ),
-                    types.FunctionDeclaration(
-                        name="modify_feature",
-                        description="Surgically modify or replace an existing feature step in the timeline.",
-                        parameters=types.Schema(
-                            type="OBJECT",
-                            properties={
-                                "index": types.Schema(type="INTEGER", description="0-based index of the step to modify"),
-                                "code": types.Schema(type="STRING", description="New code block updating 'model'"),
-                                "description": types.Schema(type="STRING", description="New description of this feature step")
-                            },
-                            required=["index", "code", "description"]
-                        )
-                    ),
-                    types.FunctionDeclaration(
-                        name="remove_feature",
-                        description="Surgically remove an unwanted feature step from the timeline.",
-                        parameters=types.Schema(
-                            type="OBJECT",
-                            properties={
-                                "index": types.Schema(type="INTEGER", description="0-based index of the step to remove")
-                            },
-                            required=["index"]
-                        )
-                    ),
-                    types.FunctionDeclaration(
-                        name="run_cad_execution",
-                        description="Compile and execute the current CAD script in the sandbox to verify it.",
-                        parameters=types.Schema(
-                            type="OBJECT",
-                            properties={}
-                        )
-                    )
-                ]
-            )
-        ]
-        
-        chat = self._safe_call(
-            self.client.chats.create,
+        modeler_instruction = """
+You are the CAD Modeler Specialist (CADModelerAgent). Your objective is to manage the parametric variables and feature timeline on the canvas.
+
+You have access to the following tools:
+- `add_parameter`: Define a new named variable (dimensions, counts, radii).
+- `set_parameter`: Surgically update the value of an existing named parameter.
+- `add_feature`: Append a new CadQuery CAD code block to the timeline (always modifying the 'model' solid variable).
+- `modify_feature`: Surgically update or replace the code of an existing feature step.
+- `remove_feature`: Surgically remove an unwanted feature step from the timeline.
+
+**Your Workflow**:
+- Define all necessary parameters first.
+- Construct the solid features step-by-step.
+- After making modification changes, return control to your coordinator so the visual critic can compile and verify them. Do not attempt to run verification yourself; you do not have sandbox execution tools.
+"""
+
+        critic_instruction = """
+You are the Visual Critic and Verification Specialist (VisualCriticAgent). Your objective is to compile the CAD model, evaluate its topology metrics, and visually analyze its shape alignment.
+
+You have access to the following tool:
+- `run_cad_execution`: Compiles the canvas code, runs it inside the isolated sandbox, generates orthographic screenshot collages, triggers vision-based critiques, and calculates the reward score.
+
+**Your Workflow**:
+- Call `run_cad_execution` to execute the current timeline.
+- Read the output JSON containing the success status, failed constraints, visual critiques, and reward value.
+- Report these findings back to your coordinator. If there are failures, describe them clearly so the modeler can correct them.
+"""
+
+        # Setup specialized sub-agents
+        modeler_agent = LlmAgent(
+            name="CADModelerAgent",
             model=self.model_name,
-            config=types.GenerateContentConfig(
-                system_instruction=system_instruction,
-                tools=tools_list,
-                temperature=0.0  # Force deterministic tool calling
-            )
+            description="CAD modeler specialist that defines parameters and updates timeline features",
+            instruction=modeler_instruction,
+            tools=[add_parameter, set_parameter, add_feature, modify_feature, remove_feature]
         )
 
-        user_parts = [f"Design Goal: {prompt}\nTarget constraints: {json.dumps(self.constraints)}"]
+        critic_agent = LlmAgent(
+            name="VisualCriticAgent",
+            model=self.model_name,
+            description="Verification specialist that compiles CAD models and runs visual checks",
+            instruction=critic_instruction,
+            tools=[run_cad_execution]
+        )
+
+        # Setup main orchestrator agent
+        orchestrator_agent = LlmAgent(
+            name="MEDAOrchestrator",
+            model=self.model_name,
+            description="Lead orchestrator agent that coordinates the design loop using handoffs",
+            instruction=orchestrator_instruction,
+            sub_agents=[modeler_agent, critic_agent]
+        )
+
+        # Setup ADK Runner with InMemory services
+        runner = Runner(
+            app_name=orchestrator_agent.name,
+            agent=orchestrator_agent,
+            artifact_service=InMemoryArtifactService(),
+            session_service=InMemorySessionService(),
+            memory_service=InMemoryMemoryService(),
+            auto_create_session=True
+        )
+
+        # Build parts for initial message
+        parts = [types.Part.from_text(text=f"Design Goal: {prompt}\nTarget constraints: {json.dumps(self.constraints)}")]
         if image_path:
             img_path = Path(image_path)
             if img_path.exists():
-                from PIL import Image
-                try:
-                    img = Image.open(img_path)
-                    user_parts.append(img)
-                except Exception as e:
-                    self.log(f"[WARNING] Failed to load image context: {e}")
-        
-        iteration = 0
+                import mimetypes
+                mime_type, _ = mimetypes.guess_type(img_path)
+                with open(img_path, "rb") as f:
+                    img_bytes = f.read()
+                parts.append(types.Part.from_bytes(data=img_bytes, mime_type=mime_type or "image/png"))
+                self.log(f"[LOG] Loaded image context: {image_path}")
+
+        new_message = types.Content(role="user", parts=parts)
+        session_id = f"session_{int(time.time())}"
+
         current_reward = 0.0
         last_execution_result = {}
-        
-        # Initiate conversation
-        response = self._safe_call(chat.send_message, user_parts)
-        
-        while iteration < max_iterations:
-            iteration += 1
-            self.log(f"\n--- CoT Iteration {iteration} of {max_iterations} ---")
-            
-            # Process function calls if the model returned them
-            if response.function_calls:
-                tool_responses = []
-                for call in response.function_calls:
-                    tool_name = call.name
-                    args = call.args
-                    self.log(f"[TOOL_CALL] Executing: {tool_name} with arguments: {args}")
-                    
-                    # Execute tool locally
-                    if tool_name == "add_parameter":
-                        res_str = add_parameter(args["name"], float(args["value"]), args["description"])
-                    elif tool_name == "set_parameter":
-                        res_str = set_parameter(args["name"], float(args["value"]))
-                    elif tool_name == "add_feature":
-                        res_str = add_feature(args["code"], args["description"])
-                    elif tool_name == "modify_feature":
-                        res_str = modify_feature(int(args["index"]), args["code"], args["description"])
-                    elif tool_name == "remove_feature":
-                        res_str = remove_feature(int(args["index"]))
-                    elif tool_name == "run_cad_execution":
-                        res_str = run_cad_execution()
-                        # Parse reward state from execution output
-                        try:
-                            exec_data = json.loads(res_str)
-                            current_reward = exec_data["reward"]
-                            last_execution_result = exec_data
-                        except Exception:
-                            pass
-                    else:
-                        res_str = f"Error: Tool {tool_name} not recognized."
-                        
-                    self.log(f"[TOOL_RESPONSE] {res_str[:300]}...")
-                    
-                    # Store response for sending back to the model
-                    tool_responses.append(
-                        types.Part.from_function_response(
-                            name=tool_name,
-                            response={"result": res_str}
-                        )
-                    )
+        iteration = 0
+
+        # Define async execution function to run the generator
+        async def run_agent():
+            nonlocal current_reward, last_execution_result, iteration
+            async for event in runner.run_async(
+                user_id="meda_user",
+                session_id=session_id,
+                new_message=new_message
+            ):
+                iteration += 1
+                self.log(f"\n--- Turn {iteration} ---")
                 
-                # Send tool execution results back to the model to continue CoT loop
-                response = self._safe_call(chat.send_message, tool_responses)
-            else:
-                # No more function calls, meaning the model finished reasoning
-                self.log(f"[REASONING_RESPONSE] {response.text}")
-                break
+                # Stream thought texts
+                if event.content and event.content.parts:
+                    for part in event.content.parts:
+                        if hasattr(part, "text") and part.text:
+                            author_label = f"[{event.author}]" if event.author else "[Agent]"
+                            self.log(f"{author_label} {part.text}")
                 
-            if current_reward == 1.0:
-                self.log("\n[LOG] Gated Reward target met (R = 1.0)! Ending design loop.")
-                break
+                # Log agent transfers
+                if event.actions and event.actions.transfer_to_agent:
+                    self.log(f"\n[TRANSFER] Handoff from '{event.author}' to '{event.actions.transfer_to_agent}'")
+                
+                # Log function call triggers
+                func_calls = event.get_function_calls()
+                if func_calls:
+                    for call in func_calls:
+                        self.log(f"[{event.author} TOOL_CALL] Executing: {call.name} with arguments: {call.args}")
+                
+                # Log function responses and inspect run_cad_execution outputs
+                func_responses = event.get_function_responses()
+                if func_responses:
+                    for resp in func_responses:
+                        val = resp.response.get("result") if resp.response else ""
+                        res_str = str(val) if val is not None else ""
+                        self.log(f"[{event.author} TOOL_RESPONSE] {res_str[:300]}...")
+                        if resp.name == "run_cad_execution":
+                            try:
+                                exec_data = json.loads(res_str)
+                                current_reward = exec_data.get("reward", 0.0)
+                                last_execution_result = exec_data
+                            except Exception:
+                                pass
+
+        # Run the async loop synchronously
+        import asyncio
+        asyncio.run(run_agent())
 
         # Auto-select suitable color hex based on prompt
         suggested_color = "#FF9900"
