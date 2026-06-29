@@ -176,6 +176,9 @@ def render_chat_workspace():
                     # Placeholder for raw logs in a collapsed state
                     active_expander = st.expander("Debug Logs (Live)", expanded=False)
                     st.session_state.active_log_placeholder = active_expander.empty()
+                    
+                    # Placeholder for live iteration rendering
+                    st.session_state.active_render_placeholder = st.empty()
 
     # Render Fast Mode toggle and attachment caption in a layout row
     ctrl_col1, ctrl_col2 = st.columns([2, 1])
@@ -798,6 +801,19 @@ def main():
             
             st.session_state.core.log_callback = streamlit_log_callback
             st.session_state.core.event_callback = streamlit_event_callback
+            
+            def streamlit_render_callback(iter_n: int, png_path: str):
+                try:
+                    if "active_render_placeholder" in st.session_state and st.session_state.active_render_placeholder:
+                        st.session_state.active_render_placeholder.image(
+                            png_path,
+                            caption=f"Iteration {iter_n} — current model",
+                            use_container_width=True,
+                        )
+                except Exception:
+                    pass
+            
+            st.session_state.core.render_callback = streamlit_render_callback
             
             keep_canvas = bool(st.session_state.generated_py_file)
             

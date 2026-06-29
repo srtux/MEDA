@@ -21,11 +21,19 @@ from google.adk.memory.in_memory_memory_service import InMemoryMemoryService
 from core.canvas import Canvas
 from core.sandbox import Sandbox
 from core.reward_engine import RewardEngine
+from core.learning_store import LearningStore
+from core.lesson_signature import to_signature
 
 load_dotenv()
 
 # Global reference to prevent Pydantic serialization of genai.Client through bound instance methods
 _active_core: contextvars.ContextVar[Optional['ReasoningCADCore']] = contextvars.ContextVar('active_core', default=None)
+
+# The module-level tools below operate on `_active_core`, a single global. Runs
+# are therefore serialized with this lock so two concurrent Streamlit sessions
+# cannot clobber each other's canvas/sandbox (bug H4).
+import threading
+_run_lock = threading.Lock()
 
 
 # ==========================================
@@ -81,100 +89,120 @@ def remove_feature(index: int) -> str:
 
 def run_cad_execution() -> str:
     """Compile and execute the current CAD script in the sandbox.
-    Returns JSON containing success status, stdout/stderr, and topological B-Rep metrics.
+
+    Renders the model on every successful compile (so the agent sees its
+    progress each turn), recalls relevant lessons for any failures, records new
+    lessons when a past failure is resolved, and returns a JSON feedback blob.
     """
     active = _active_core.get()
-    if active:
-        code = active.canvas.to_python_code()
-        res = active.sandbox.execute(code)
-        
-        if res.success:
-            active.successful_compiles_count += 1
-            iter_prefix = f"001_iter_{active.successful_compiles_count}"
-            import shutil
-            try:
-                shutil.copy2(active.sandbox.working_dir / "001.stl", active.sandbox.working_dir / f"{iter_prefix}.stl")
-                with open(active.sandbox.working_dir / f"{iter_prefix}.py", "w", encoding="utf-8") as f:
-                    f.write(code)
-            except Exception as e:
-                active.log(f"[WARNING] Failed to save intermediate iteration files: {e}")
-        
-        # Calculate reward internally to provide quick feedback. The generated
-        # STL path enables distance-based scoring when a reference shape is set.
-        generated_stl = str(active.sandbox.working_dir / "001.stl")
-        reward, breakdown = RewardEngine.calculate_reward(
-            res.success, res.metrics, active.constraints, generated_stl=generated_stl
+    if not active:
+        return "Error: No active CAD session."
+
+    code = active.canvas.to_python_code()
+    res = active.sandbox.execute(code)
+    
+    if res.success:
+        active.successful_compiles_count += 1
+        iter_prefix = f"001_iter_{active.successful_compiles_count}"
+        import shutil
+        try:
+            shutil.copy2(active.sandbox.working_dir / "001.stl", active.sandbox.working_dir / f"{iter_prefix}.stl")
+            with open(active.sandbox.working_dir / f"{iter_prefix}.py", "w", encoding="utf-8") as f:
+                f.write(code)
+        except Exception as e:
+            active.log(f"[WARNING] Failed to save intermediate iteration files: {e}")
+
+    # Only score against an on-disk STL that the current run actually produced
+    # (the sandbox deletes stale artifacts up front, so a missing file means
+    # this turn did not export one).
+    stl_file = active.sandbox.working_dir / "001.stl"
+    generated_stl = str(stl_file) if (res.success and stl_file.exists()) else None
+    reward, breakdown = RewardEngine.calculate_reward(
+        res.success, res.metrics, active.constraints, generated_stl=generated_stl
+    )
+
+    if not res.success:
+        err_msg = "Compilation failure"
+        if res.stderr:
+            err_msg = f"Compile error: {res.stderr.strip()}"
+        elif "[METRICS_ERROR]" in res.stdout:
+            for line in res.stdout.split("\n"):
+                if line.startswith("[METRICS_ERROR]"):
+                    err_msg = line
+                    break
+        breakdown["failed_constraints"].append(err_msg)
+    elif not res.exported:
+        # Solid built but STL/STEP export failed: surface as a soft warning so
+        # the modeler can fix manifold issues, without discarding valid metrics.
+        breakdown["failed_constraints"].append(
+            "Export warning: solid built but STL/STEP export failed (possible non-manifold geometry)."
         )
-        
-        if not res.success:
-            err_msg = "Compilation failure"
-            if res.stderr:
-                err_msg = f"Compile error: {res.stderr.strip()}"
-            elif "[METRICS_ERROR]" in res.stdout:
-                for line in res.stdout.split("\n"):
-                    if line.startswith("[METRICS_ERROR]"):
-                        err_msg = line
-                        break
-            breakdown["failed_constraints"].append(err_msg)
 
-        # Multi-View Visual Critique step
-        # If compilation is clean and B-Rep reward is 1.0 (or no constraints were violated), check visual correctness
-        if res.success and reward == 1.0:
-            png_path = active.sandbox.working_dir / "001.png"
-            try:
-                from utils.capture_screenshot import capture_stl_screenshot
-                capture_stl_screenshot(str(active.sandbox.working_dir / "001.stl"), str(png_path))
-                
-                # Invoke multimodal visual critic to evaluate match alignment
-                visual_critique_system = """
-                You are an expert mechanical engineering checker. Compare the rendered 3D CAD model views (collage of Isometric, Top, Front, Right orthographic projections) against the original text design prompt.
-                Evaluate the model's structural features:
-                1. Are all secondary parts (stems, leaves, handles, holes) correctly positioned relative to the main body?
-                2. Are there any detached, overlapping, or intersecting surfaces causing distorted meshes?
-                3. Does the design look physically accurate and completely aligned with the prompt?
+    # Render the current model on every successful compile (not just reward==1.0)
+    # so the agent gets visual feedback each iteration.
+    render_path = None
+    render_bytes = None
+    if res.success:
+        render_path, render_bytes = active.render_current_model(code)
 
-                Return a JSON object containing two fields:
-                - "match": boolean (true if visual alignment is correct and complete, false otherwise)
-                - "critique": string (detailed critique describing any visual/positional errors, or explaining why it matches)
-                Do not include markdown code block syntax.
-                """
-                from PIL import Image
-                img = Image.open(png_path)
-                
-                critic_resp = active._safe_call(
-                    active.client.models.generate_content,
-                    model=active.model_name,
-                    contents=[img, f"Original prompt: {active.prompt}"],
-                    config=types.GenerateContentConfig(
-                         system_instruction=visual_critique_system,
-                         temperature=0.0,
-                         response_mime_type="application/json"
-                    )
+    # Multi-View Visual Critique: only escalate to the (costly) vision model
+    # once the B-Rep reward is already 1.0, reusing the render captured above.
+    if res.success and reward == 1.0:
+        try:
+            if render_bytes is None:
+                raise RuntimeError("no render available for visual critique")
+            visual_critique_system = """
+            You are an expert mechanical engineering checker. Compare the rendered 3D CAD model views (collage of Isometric, Top, Front, Right orthographic projections) against the original text design prompt.
+            Evaluate the model's structural features:
+            1. Are all secondary parts (stems, leaves, handles, holes) correctly positioned relative to the main body?
+            2. Are there any detached, overlapping, or intersecting surfaces causing distorted meshes?
+            3. Does the design look physically accurate and completely aligned with the prompt?
+
+            Return a JSON object containing two fields:
+            - "match": boolean (true if visual alignment is correct and complete, false otherwise)
+            - "critique": string (detailed critique describing any visual/positional errors, or explaining why it matches)
+            Do not include markdown code block syntax.
+            """
+            import io
+            from PIL import Image
+            img = Image.open(io.BytesIO(render_bytes))
+
+            critic_resp = active._safe_call(
+                active.client.models.generate_content,
+                model=active.model_name,
+                contents=[img, f"Original prompt: {active.prompt}"],
+                config=types.GenerateContentConfig(
+                    system_instruction=visual_critique_system,
+                    temperature=0.0,
+                    response_mime_type="application/json"
                 )
-                critic_data = json.loads(critic_resp.text.strip())
-                active.log(f"[LOG] Visual Critique - Match: {critic_data.get('match')}, Critique: {critic_data.get('critique')}")
-                
-                if not critic_data.get("match", False):
-                    # Visual fail sets reward back to 0.0 to force correction turn
-                    reward = 0.0
-                    breakdown["failed_constraints"].append(f"Visual validation failure: {critic_data.get('critique')}")
-            except Exception as e:
-                active.log(f"[WARNING] Visual critique step encountered an error: {e}")
+            )
+            critic_data = json.loads(critic_resp.text.strip())
+            active.log(f"[LOG] Visual Critique - Match: {critic_data.get('match')}, Critique: {critic_data.get('critique')}")
+
+            if not critic_data.get("match", False):
                 reward = 0.0
-                breakdown["failed_constraints"].append(f"Visual critique error: {str(e)}")
+                breakdown["failed_constraints"].append(f"Visual validation failure: {critic_data.get('critique')}")
+        except Exception as e:
+            active.log(f"[WARNING] Visual critique step encountered an error: {e}")
+            reward = 0.0
+            breakdown["failed_constraints"].append(f"Visual critique error: {str(e)}")
 
-        output = {
-            "success": res.success,
-            "metrics": res.metrics,
-            "reward": reward,
-            "geom_score": breakdown.get("geom_score"),
-            "distances": breakdown.get("distances"),
-            "failed_constraints": breakdown["failed_constraints"]
-        }
-        return json.dumps(output)
-    return "Error: No active CAD session."
+    # --- Self-learning: recall relevant past lessons, learn from this turn ---
+    recalled = active.recall_lessons(breakdown["failed_constraints"])
+    active.learn_from_transition(breakdown["failed_constraints"], reward, code)
 
-
+    output = {
+        "success": res.success,
+        "metrics": res.metrics,
+        "reward": reward,
+        "geom_score": breakdown.get("geom_score"),
+        "distances": breakdown.get("distances"),
+        "failed_constraints": breakdown["failed_constraints"],
+        "recalled_lessons": recalled,
+        "render_path": render_path,
+    }
+    return json.dumps(output)
 from functools import cached_property
 from google.adk.models import Gemini
 
@@ -259,6 +287,224 @@ You have access to the following tool:
         self.log_callback = None
         self.event_callback = None
         self.successful_compiles_count = 0
+        
+        # Live per-iteration render callback (set by the UI): (iter_n, png_path).
+        self.render_callback = None
+
+        # Durable cross-run learning store (lessons + reusable skills).
+        try:
+            self.store: Optional[LearningStore] = LearningStore(genai_client=self.client)
+        except Exception as e:
+            self.store = None
+            print(f"[WARNING] Learning store unavailable: {e}", flush=True)
+
+        # Per-run render bookkeeping.
+        self.render_iter = 0
+        self.last_geom_hash: Optional[str] = None
+        self.last_png_path: Optional[str] = None
+        self.last_png_bytes: Optional[bytes] = None
+
+        # Per-run learning bookkeeping.
+        self._surfaced_lessons: Dict[str, str] = {}   # signature -> lesson id
+        self._prev_failed_sigs: set = set()
+        self._prev_detail: Dict[str, str] = {}
+        self._prev_reward: float = 0.0
+
+    def _reset_run_state(self):
+        self.render_iter = 0
+        self.last_geom_hash = None
+        self.last_png_path = None
+        self.last_png_bytes = None
+        self._surfaced_lessons.clear()
+        self._prev_failed_sigs.clear()
+        self._prev_detail.clear()
+        self._prev_reward = 0.0
+        # If active, clean sandbox workspace before running (H1)
+        try:
+            for item in self.sandbox.working_dir.iterdir():
+                if item.name in ("001.stl", "001.step", "001.png"):
+                    item.unlink(missing_ok=True)
+                elif item.name.startswith("iter_") and item.name.endswith(".png"):
+                    item.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+    def render_current_model(self, compiled_code: str):
+        """Render the freshly-compiled model to ``iter_{n}.png``.
+
+        Skips re-rendering when the compiled code is unchanged (geometry hash),
+        promotes the latest render to ``001.png`` for the final UI, and pushes
+        it to the live render callback. Returns ``(png_path, png_bytes)`` or
+        ``(None, None)`` when no STL is available or rendering fails.
+        """
+        import hashlib
+        import shutil
+        from pathlib import Path as _Path
+
+        geom_hash = hashlib.sha1(compiled_code.encode("utf-8")).hexdigest()
+        if (geom_hash == self.last_geom_hash and self.last_png_path
+                and _Path(self.last_png_path).exists()):
+            return self.last_png_path, self.last_png_bytes
+
+        wd = self.sandbox.working_dir
+        stl_path = wd / "001.stl"
+        if not stl_path.exists():
+            return None, None
+
+        self.render_iter += 1
+        n = self.render_iter
+        png_path = wd / f"iter_{n}.png"
+        try:
+            from utils.capture_screenshot import capture_orthographic_collage
+            png_bytes = capture_orthographic_collage(str(stl_path), str(png_path))
+        except Exception as e:
+            self.log(f"[WARNING] Render failed: {e}")
+            return None, None
+        if png_bytes is None:
+            return None, None
+
+        try:
+            shutil.copy(png_path, wd / "001.png")
+        except Exception:
+            pass
+
+        self.last_geom_hash = geom_hash
+        self.last_png_path = str(png_path)
+        self.last_png_bytes = png_bytes
+        self.log(f"[LOG] Rendered iteration {n} -> {png_path.name}")
+        if self.render_callback:
+            try:
+                self.render_callback(n, str(png_path))
+            except Exception:
+                pass
+        return str(png_path), png_bytes
+
+    # ---------------------------------------------------------- learning
+    def build_memory_preamble(self, prompt: str) -> str:
+        """Retrieve relevant skills + lessons for a prompt as an instruction preamble."""
+        if not self.store:
+            return ""
+        try:
+            skills = self.store.retrieve_skills(prompt, k=4)
+            lessons = self.store.retrieve_lessons(prompt, k=3)
+        except Exception as e:
+            self.log(f"[WARNING] Memory retrieval failed: {e}")
+            return ""
+        if not skills and not lessons:
+            return ""
+        lines = []
+        if skills:
+            lines.append("## Reusable CadQuery skills (parameterized snippets that worked before):")
+            for s in skills:
+                lines.append(f"- {s['name']} {s['signature']}: {s['goal_description']}")
+                lines.append(f"    {s['code_template']}")
+        if lessons:
+            lines.append("\n## Lessons from past failures (do NOT repeat these mistakes):")
+            for l in lessons:
+                lines.append(f"- [{l['error_signature']}] {l['root_cause']} FIX: {l['corrective_fix']}")
+        return "\n".join(lines)
+
+    def recall_lessons(self, failed_constraints):
+        """For each current failure, recall the most similar past lessons."""
+        if not self.store or not failed_constraints:
+            return []
+        recalled = []
+        for fc in failed_constraints:
+            sig = to_signature(fc)
+            try:
+                hits = self.store.retrieve_lessons(f"{sig}\n{self.prompt}", k=2, signature=sig)
+            except Exception:
+                hits = []
+            for h in hits:
+                self._surfaced_lessons[sig] = h["id"]
+                recalled.extend(hits)
+        # Dedup by id, cap size.
+        seen, out = set(), []
+        for r in recalled:
+            if r["id"] not in seen:
+                seen.add(r["id"])
+                out.append(r)
+        return out[:4]
+
+    def learn_from_transition(self, current_failed, reward, code):
+        """Update the lesson store based on what changed since the last turn."""
+        if not self.store:
+            return
+        curr_sigs = {to_signature(fc) for fc in current_failed}
+        resolved = self._prev_failed_sigs - curr_sigs
+        persisted = self._prev_failed_sigs & curr_sigs
+
+        # Positive feedback + new lesson when a prior failure is resolved.
+        if resolved and reward > self._prev_reward:
+            fix_snippet = "\n".join(code.splitlines()[-12:])
+            for sig in resolved:
+                lid = self._surfaced_lessons.get(sig)
+                if lid:
+                    try:
+                        self.store.feedback(lid, helped=True)
+                    except Exception:
+                        pass
+                try:
+                    self.store.record_lesson(
+                        error_signature=sig,
+                        error_detail=self._prev_detail.get(sig, sig),
+                        root_cause=f"Resolved '{sig}' by adjusting the feature timeline for this design.",
+                        corrective_fix=fix_snippet,
+                        prompt_context=self.prompt,
+                    )
+                except Exception:
+                    pass
+
+        # Negative feedback when a surfaced lesson did not help.
+        for sig in persisted:
+            lid = self._surfaced_lessons.get(sig)
+            if lid:
+                try:
+                    self.store.feedback(lid, helped=False)
+                except Exception:
+                    pass
+
+        self._prev_failed_sigs = curr_sigs
+        self._prev_detail = {to_signature(fc): fc for fc in current_failed}
+        self._prev_reward = reward
+
+    def harvest_skill(self):
+        """After a successful run, abstract one reusable skill from the timeline."""
+        if not self.store:
+            return
+        try:
+            features = [f.code for f in self.canvas.features]
+            if not features:
+                return
+            harvest_system = """
+You are a CAD knowledge curator. Given a CadQuery feature timeline that
+successfully produced a correct model, extract ONE reusable, parameterized
+skill that would help build similar models in the future. Generalize literal
+numbers into named parameters.
+Return a raw JSON object with keys: "name" (snake_case identifier),
+"goal_description" (one sentence), "signature" (parameter list like
+"(width, height)"), and "code_template" (the parameterized CadQuery snippet).
+Do not include markdown formatting.
+"""
+            resp = self._safe_call(
+                self.client.models.generate_content,
+                model=self.model_name,
+                contents=f"Design prompt: {self.prompt}\nFeature timeline:\n" + "\n".join(features),
+                config=types.GenerateContentConfig(
+                    system_instruction=harvest_system,
+                    temperature=0.0,
+                    response_mime_type="application/json",
+                ),
+            )
+            data = json.loads(resp.text.strip())
+            if data.get("name") and data.get("code_template"):
+                self.store.record_skill(
+                    data["name"], data.get("goal_description", ""),
+                    data.get("signature", ""), data["code_template"],
+                )
+                self.log(f"[LOG] Harvested skill '{data['name']}' into learning store.")
+        except Exception as e:
+            self.log(f"[WARNING] Skill harvest failed: {e}")
 
     def log(self, message: str):
         print(message, flush=True)
@@ -287,7 +533,12 @@ You have access to the following tool:
             except Exception as e:
                 raise e
 
-    def run_design_loop(
+    def run_design_loop(self, prompt, constraints, image_path=None, max_iterations=100):
+        """Serialized public entry point (bug H4) that delegates to the impl."""
+        with _run_lock:
+            return self._run_design_loop_impl(prompt, constraints, image_path, max_iterations)
+
+    def _run_design_loop_impl(
         self,
         prompt: str,
         constraints: Dict[str, Any],
@@ -299,8 +550,8 @@ You have access to the following tool:
     ) -> Dict[str, Any]:
         """Runs the autonomous Chain-of-Thought tool execution loop until the design goal is achieved."""
         _active_core.set(self)
-        
-        self.log(f"\n[LOG] Initializing design loop for prompt: '{prompt}' (Fast Mode: {fast_mode})")
+        self._reset_run_state()
+        self.log(f"\n[LOG] Initializing design loop for prompt: '{prompt}' (Fast Mode: {fast_mode})\n")
         self.log(f"[LOG] Target Constraints: {constraints}")
         if image_path:
             self.log(f"[LOG] Image Path: {image_path}")
@@ -359,15 +610,19 @@ You have access to the following tool:
         # Extract/infer constraints from prompt using a simple model call
         inferred_constraints = {}
         try:
+            # NOTE (bug H3): we deliberately do NOT infer exact face/edge/vertex
+            # counts here. Those counts shift unpredictably with fillets, holes,
+            # and patterns, so a guessed integer target made most designs
+            # unsatisfiable under the strict equality gate. We only infer
+            # tolerance-checked metrics (volume, center of mass); shape
+            # correctness is enforced by the visual critic instead.
             system_extract = """
-            You are a CAD parameter extraction assistant. Analyze the user design prompt and extract any implicit or explicit mathematical target constraints for the following B-Rep metrics (only if they are mentioned or can be calculated from the text):
+            You are a CAD parameter extraction assistant. Analyze the user design prompt and extract ONLY clearly-stated or directly-calculable target constraints for these tolerance-checked B-Rep metrics:
             - "volume": target total volume in mm^3 (float)
-            - "num_faces": exact number of faces (integer)
-            - "num_edges": exact number of edges (integer)
             - "center_of_mass": [x, y, z] expected center of mass coordinates (list of floats)
-            
-            Return the output as a valid JSON object. Do not include markdown formatting or extra text.
-            If no constraints can be calculated, return {}.
+
+            Do NOT guess face, edge, or vertex counts. Return the output as a valid JSON object with no markdown.
+            If nothing can be confidently calculated, return {}.
             """
             resp = self._safe_call(
                 self.client.models.generate_content,
@@ -542,21 +797,52 @@ You have access to the following tool:
         if getattr(self, "_api_key_override", None):
             model_wrapper._api_key = self._api_key_override
 
+        # Inject retrieved skills + lessons from past runs so the modeler starts
+        # informed and avoids repeating known mistakes (self-learning loop).
+        memory_preamble = self.build_memory_preamble(prompt)
+        if memory_preamble:
+            modeler_instruction = (
+                modeler_instruction
+                + "\n\n# PRIOR EXPERIENCE (retrieved from the learning store)\n"
+                + memory_preamble
+                + "\n\nReuse the skills above where helpful and heed the lessons.\n"
+            )
+            critic_instruction = (
+                critic_instruction
+                + "\n\nNote: an image of the current rendered model is attached each turn; "
+                "use it to visually verify part placement and report misalignments."
+            )
+            self.log("[LOG] Injected prior lessons/skills into modeler context.")
+
+        # Best-effort callback that attaches the latest render to each agent turn
+        # so the LLM can visually course-correct. Wrapped so an unsupported ADK
+        # API version simply skips image attachment rather than crashing.
+        def _attach_render(callback_context, llm_request):
+            try:
+                if self.last_png_bytes and getattr(llm_request, "contents", None):
+                    part = types.Part.from_bytes(data=self.last_png_bytes, mime_type="image/png")
+                    llm_request.contents[-1].parts.append(part)
+            except Exception:
+                pass
+            return None
+
         # Setup specialized sub-agents
         modeler_agent = LlmAgent(
             name="CADModelerAgent",
             model=model_wrapper,
             description="CAD modeler specialist that defines parameters and updates timeline features",
-            instruction=self.MODELER_INSTRUCTION,
-            tools=[add_parameter, set_parameter, add_feature, modify_feature, remove_feature]
+            instruction=modeler_instruction,
+            tools=[add_parameter, set_parameter, add_feature, modify_feature, remove_feature],
+            before_model_callback=_attach_render,
         )
 
         critic_agent = LlmAgent(
             name="VisualCriticAgent",
             model=model_wrapper,
             description="Verification specialist that compiles CAD models and runs visual checks",
-            instruction=self.CRITIC_INSTRUCTION,
-            tools=[run_cad_execution]
+            instruction=critic_instruction,
+            tools=[run_cad_execution],
+            before_model_callback=_attach_render,
         )
 
         # Setup main orchestrator agent
@@ -597,10 +883,14 @@ You have access to the following tool:
         current_reward = 0.0
         last_execution_result = {}
         iteration = 0
+        exec_turns = 0          # number of actual compile/verify cycles
+        # Absolute safety cap on raw ADK events to bound runaway loops even if
+        # no execution turn is ever reached.
+        event_cap = max(50, max_iterations * 30)
 
         # Define async execution function to run the generator
         async def run_agent():
-            nonlocal current_reward, last_execution_result, iteration
+            nonlocal current_reward, last_execution_result, iteration, exec_turns
             async for event in runner.run_async(
                 user_id="meda_user",
                 session_id=session_id,
@@ -667,6 +957,7 @@ You have access to the following tool:
                         reward = None
                         failed_constraints = []
                         if resp.name == "run_cad_execution":
+                            exec_turns += 1
                             try:
                                 exec_data = json.loads(res_str)
                                 current_reward = exec_data.get("reward", 0.0)
@@ -686,6 +977,19 @@ You have access to the following tool:
                                 "failed_constraints": failed_constraints
                             })
 
+                # Enforce loop bounds (bug C2): stop once we have run the design
+                # goal to success, exhausted the iteration budget, or hit the
+                # absolute event safety cap.
+                if current_reward == 1.0:
+                    self.log(f"[LOG] Success reached (reward=1.0) after {exec_turns} execution turn(s).")
+                    break
+                if exec_turns >= max_iterations:
+                    self.log(f"[WARNING] Reached max_iterations ({max_iterations}); stopping loop.")
+                    break
+                if iteration >= event_cap:
+                    self.log(f"[WARNING] Event cap ({event_cap}) reached; stopping loop.")
+                    break
+
         # Run the async loop synchronously
         import asyncio
         asyncio.run(run_agent())
@@ -693,6 +997,8 @@ You have access to the following tool:
         # Auto-select suitable color hex based on prompt
         suggested_color = "#FF9900"
         if current_reward == 1.0:
+            # Distill a reusable skill from this successful timeline.
+            self.harvest_skill()
             try:
                 color_system = """
                 You are a design color coordinator. Given a CAD model description prompt, return a suitable single hex color code (e.g. "#FF0800" for apple, "#8B5A2B" for wood box, "#708090" for steel tube) that represents the typical visual appearance of the object.
@@ -721,16 +1027,20 @@ You have access to the following tool:
         with open(final_py_path, "w", encoding="utf-8") as f:
             f.write(final_code)
             
+        memory_counts = self.store.counts() if self.store else {}
+
         # Compile and save diagnostic snapshot JSON
         diagnostic = {
             "prompt": prompt,
             "constraints": self.constraints,
-            "iterations": iteration,
+            "design_iterations": exec_turns,   # actual compile/verify cycles
+            "events": iteration,               # raw ADK events (was "iterations")
             "final_reward": current_reward,
             "final_code": final_code,
             "metrics": last_execution_result.get("metrics"),
             "failed_constraints": last_execution_result.get("failed_constraints", []),
-            "suggested_color": suggested_color
+            "suggested_color": suggested_color,
+            "memory_counts": memory_counts,
         }
         diagnostic_path = self.sandbox.working_dir / "diagnostic.json"
         with open(diagnostic_path, "w", encoding="utf-8") as f:
@@ -738,14 +1048,15 @@ You have access to the following tool:
 
         # Clean global pointer
         _active_core.set(None)
-            
         return {
             "success": current_reward == 1.0,
-            "iterations": iteration,
+            "iterations": exec_turns,
+            "events": iteration,
             "final_reward": current_reward,
             "final_code": final_code,
             "metrics": last_execution_result.get("metrics"),
             "failed_constraints": last_execution_result.get("failed_constraints", []),
             "color": suggested_color,
-            "session_id": session_id
+            "session_id": session_id,
+            "memory_counts": memory_counts,
         }
